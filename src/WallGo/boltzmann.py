@@ -1451,7 +1451,7 @@ class EWBGBoltzmannSolver:
         )
 
         dThetadChi = thetaPoly.derivative(1).coefficients[:, 1:-1, None, None]
-        # ddThetadChi2 = None # not implemented yet, but needed for the second derivative of theta
+        ddThetadChi2 = thetaPoly.derivative(1).derivative(1).coefficients[:, 1:-1, None, None]
 
         # adding new axes, to make everything rank 3 like deltaF (z, pz, pp)
         # for fast multiplication of arrays, using numpy's broadcasting rules
@@ -1582,7 +1582,7 @@ class EWBGBoltzmannSolver:
             dvdChi = vPoly.derivative(0).coefficients[None, 1:-1, None, None]
             dMsqdChi = msqPoly.derivative(1).coefficients[:, 1:-1, None, None]
             dThetadChi = thetaPoly.derivative(1).coefficients[:, 1:-1, None, None]
-            # ddThetadChi2 = None # not implemented yet, but needed for the second derivative of theta
+            ddThetadChi2 = thetaPoly.derivative(1).derivative(1).coefficients[:, 1:-1, None, None] # Okay? not sure if this is the right way to do it.
 
         else:  # self.derivatives == "Finite Difference"
             # intertwiner matrices are simply unit matrices
