@@ -1542,6 +1542,7 @@ class EWBGBoltzmannSolver:
         msq = msqFull[:, 1:-1, None, None]
         theta = thetaFull[:, 1:-1, None, None]
         energy = np.sqrt(msq + pz**2 + pp**2)
+        energy_z = np.sqrt(msq + pz**2)
 
         # fluctuation mode
         statistics = np.array(
@@ -1581,6 +1582,7 @@ class EWBGBoltzmannSolver:
             ]
             dvdChi = vPoly.derivative(0).coefficients[None, 1:-1, None, None]
             dMsqdChi = msqPoly.derivative(1).coefficients[:, 1:-1, None, None]
+            d2MsqdChi2 = msqPoly.derivative(1).derivative(1).coefficients[:, 1:-1, None, None] # Okay? not sure if this is the right way to do it.
             dThetadChi = thetaPoly.derivative(1).coefficients[:, 1:-1, None, None]
             ddThetadChi2 = thetaPoly.derivative(1).derivative(1).coefficients[:, 1:-1, None, None] # Okay? not sure if this is the right way to do it.
 
@@ -1650,7 +1652,22 @@ class EWBGBoltzmannSolver:
 
         ##### source term for CP-violating part of the Boltzmann equation #####
 
-        source_CPV = None # not implemented yet, but needed for the CP-violating part of the Boltzmann equation
+        force_CPV =  0.5 * (d2MsqdChi2 * dThetadChi + msqPoly * ddThetadChi2) / (energy * energy_z) - 0.25 * msqPoly * dThetadChi * dMsqdChi / (energy**3 * energy_z)
+
+        delta = 0.5 * msqPoly * dThetadChi / (energy * energy_z)
+
+        dXdxi = - (momentumPlasma * gammaPlasma ** 2 * dvdChi + energyPlasma * dTemperaturedChi / temperature) / temperature
+
+        dAdxi = gammaPlasma ** 3 * v * dvdChi / temperature - gammaPlasma * dTemperaturedChi / (temperature ** 2)
+        
+        deltaPrimexi = None
+
+        deltaPrimepz = None
+
+        source_CPV = force_CPV * dfEq * gammaPlasma * v / temperature  
+        source_CPV = source_CPV - momentumWall * (d2fEq * dXdxi * gammaPlasma / temperature * (delta)) - momentumWall * dfEq * dAdxi * delta - momentumWall * dfEq * deltaPrimexi * gammaPlasma / temperature * v
+        source_CPV += 1 / 2 * dMsqdChi * (uwBaruPl / temperature * d2fEq  * (delta) + dfEq * (gammaPlasma / temperature * (deltaPrimepz)) )
+
 
         ##### liouville operator #####
         # Given in the LHS of Eq. (5) in 2204.13120, with further details given
@@ -1781,15 +1798,14 @@ class EWBGBoltzmannSolver:
     
     @staticmethod
     def _d2feq(x: np.ndarray, statistics: int | np.ndarray) -> np.ndarray:
-        """
-        Second derivative of thermal distribution functions
-        """
         x = np.asarray(x)
-        exp_x = np.exp(x)
-        exp_neg_x = np.exp(-x)
-        denominator = (exp_x - statistics) ** 2
-        return np.where(
-            x > EWBGBoltzmannSolver.MAX_EXPONENT,
-            0,
-            (exp_x + exp_neg_x) / denominator,
+        out = np.zeros_like(x, dtype=float)
+
+        mask = x <= EWBGBoltzmannSolver.MAX_EXPONENT
+        exp_x = np.exp(x[mask])
+
+        out[mask] = (
+            exp_x * (exp_x + statistics)
+            / (exp_x - statistics) ** 3
         )
+        return out
