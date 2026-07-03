@@ -1582,9 +1582,9 @@ class EWBGBoltzmannSolver:
             ]
             dvdChi = vPoly.derivative(0).coefficients[None, 1:-1, None, None]
             dMsqdChi = msqPoly.derivative(1).coefficients[:, 1:-1, None, None]
-            d2MsqdChi2 = msqPoly.derivative(1).derivative(1).coefficients[:, 1:-1, None, None] # Okay? not sure if this is the right way to do it.
+            d2MsqdChi2 = msqPoly.derivative(1).derivative(1).coefficients[:, 1:-1, None, None]
             dThetadChi = thetaPoly.derivative(1).coefficients[:, 1:-1, None, None]
-            ddThetadChi2 = thetaPoly.derivative(1).derivative(1).coefficients[:, 1:-1, None, None] # Okay? not sure if this is the right way to do it.
+            ddThetadChi2 = thetaPoly.derivative(1).derivative(1).coefficients[:, 1:-1, None, None]
 
         else:  # self.derivatives == "Finite Difference"
             # intertwiner matrices are simply unit matrices
