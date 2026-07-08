@@ -1595,7 +1595,9 @@ class EWBGBoltzmannSolver:
             # derivative matrices
             chiFull, rzFull, _ = self.grid.getCompactCoordinates(endpoints=True)
             derivOperatorChi = findiff.FinDiff((0, chiFull, 1), acc=2)
+            derivOperatorChi = findiff.FinDiff((0, chiFull, 2), acc=2) # second order derivative for CPV source term
             derivMatrixChi = derivOperatorChi.matrix((self.grid.M + 1,))
+            derivMatrixChi2 = derivOperatorChi2.matrix((self.grid.M + 1,))
             derivOperatorRz = findiff.FinDiff((0, rzFull, 1), acc=2)
             derivMatrixRz = derivOperatorRz.matrix((self.grid.N + 1,))
             # spatial derivatives of profiles, endpoints used for taking
@@ -1612,10 +1614,21 @@ class EWBGBoltzmannSolver:
                 derivMatrixChi.toarray()[None, :, :] * msqFull[:, None, :],
                 axis=-1,
             )[:, 1:-1, None, None]
+            d2MsqdChi2 = np.sum(
+                derivMatrixChi2.toarray()[None, :, :] * msqFull[:, None, :],
+                axis=-1,
+            )[:, 1:-1, None, None]
+            dThetadChi = np.sum(
+                derivMatrixChi.toarray()[None, :, :] * thetaFull[:, None, :], axis=-1
+            )[:, 1:-1, None, None]
+            ddThetadChi2 = np.sum(
+                derivMatrixChi2.toarray()[None, :, :] * thetaFull[:, None, :], axis=-1
+            )[:, 1:-1, None, None]
             # restructuring derivative matrices to appropriate forms for
             # Liouville operator
             derivMatrixChi = derivMatrixChi.toarray()[1:-1, 1:-1]
             derivMatrixRz = derivMatrixRz.toarray()[1:-1, 1:-1]
+            derivMatrixChi2 = derivMatrixChi2.toarray()[1:-1, 1:-1]
 
         # dot products with wall velocity
         gammaWall = 1 / np.sqrt(1 - velocityWall**2)
@@ -1651,23 +1664,6 @@ class EWBGBoltzmannSolver:
         )
 
         ##### source term for CP-violating part of the Boltzmann equation #####
-
-        force_CPV =  0.5 * (d2MsqdChi2 * dThetadChi + msqPoly * ddThetadChi2) / (energy * energy_z) - 0.25 * msqPoly * dThetadChi * dMsqdChi / (energy**3 * energy_z)
-
-        delta = 0.5 * msqPoly * dThetadChi / (energy * energy_z)
-
-        dXdxi = - (momentumPlasma * gammaPlasma ** 2 * dvdChi + energyPlasma * dTemperaturedChi / temperature) / temperature
-
-        dAdxi = gammaPlasma ** 3 * v * dvdChi / temperature - gammaPlasma * dTemperaturedChi / (temperature ** 2)
-        
-        deltaPrimexi = None
-
-        deltaPrimepz = None
-
-        source_CPV = force_CPV * dfEq * gammaPlasma * v / temperature  
-        source_CPV = source_CPV - momentumWall * (d2fEq * dXdxi * gammaPlasma / temperature * (delta)) - momentumWall * dfEq * dAdxi * delta - momentumWall * dfEq * deltaPrimexi * gammaPlasma / temperature * v
-        source_CPV += 1 / 2 * dMsqdChi * (uwBaruPl / temperature * d2fEq  * (delta) + dfEq * (gammaPlasma / temperature * (deltaPrimepz)) )
-
 
         ##### liouville operator #####
         # Given in the LHS of Eq. (5) in 2204.13120, with further details given
