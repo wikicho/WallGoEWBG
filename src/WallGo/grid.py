@@ -149,6 +149,9 @@ class Grid:
         (self.dxidchi, self.dpzdrz, self.dppdrp) = self.compactificationDerivatives(
             self.chiValues, self.rzValues, self.rpValues
         )
+        (self.d2xidchi2, self.d2pdzdrz2, self.d2ppdrp2) = self.compactificationSecondDerivatives(
+            self.chiValues, self.rzValues, self.rpValues
+        )
 
     def changeMomentumFalloffScale(self, newScale: float) -> None:
         """
@@ -273,6 +276,35 @@ class Grid:
             return dxidchi, dpzdrz, dppdrp
         return self.dxidchi, self.dpzdrz, self.dppdrp
 
+    def getCompactificationSecondDerivatives(
+            self,
+            endpoints: bool=False,
+            ) -> tuple[np.ndarray, ...]:
+        r"""
+        Return second derivatives of compactified coordinates of grid, with respect to
+        uncompactified derivatives.
+
+        Parameters
+        ----------
+        endpoints : Bool, optional
+            If True, include endpoints of grid. Default is False.
+
+        Returns
+        ----------
+        d2chiValues : array_like
+            Grid of the :math:`\partial_\xi^2\chi` direction.
+        d2rzValues : array_like
+            Grid of the :math:`\partial_{p_z}^2\rho_z` direction.
+        d2rpValues : array_like
+            Grid of the :math:`\partial_{p_\Vert}^2\rho_\Vert` direction.
+        """
+        if endpoints:
+            d2xdchi2 = np.array([np.inf] + list(self.d2xdchi2) + [np.inf])
+            d2pdzdrz2 = np.array([np.inf] + list(self.d2pdzdrz2) + [np.inf])
+            d2ppdrp2 = np.array(list(self.d2ppdrp2) + [np.inf])
+            return d2xdchi2, d2pdzdrz2, d2ppdrp2
+        return self.d2xdchi2, self.d2pdzdrz2, self.d2ppdrp2
+
     def compactify(
             self,
             z: np.ndarray, # pylint: disable=invalid-name
@@ -376,3 +408,39 @@ class Grid:
         dpzdpzCompact = 2 * self.momentumFalloffT / (1 - pzCompact**2)
         dppdppCompact = self.momentumFalloffT / (1 - ppCompact)
         return dzdzCompact, dpzdpzCompact, dppdppCompact
+
+    def compactificationSecondDerivatives(
+        self,
+        zCompact: np.ndarray,
+        pzCompact: np.ndarray,
+        ppCompact: np.ndarray,
+        ) -> tuple[np.ndarray, ...]:
+        r"""
+        Second derivative :math:`d^2(X)/d(X_\text{compact})^2` of coordinate transforms to [-1, 1] interval.
+
+        Parameters
+        ----------
+        z_compact : array-like
+            Compact z coordinate (chi).
+        pz_compact : array-like
+            Compact pz coordinate (rho_z).
+        pp_compact : array-like
+            Compact p_par coordinate (rho_par).
+        
+        Returns
+        -------
+        d2zdzCompact2 : array-like
+            Second derivative d^2(z)/d(chi)^2.
+        d2pzdpzCompact2 : array-like
+            Second derivative d^2(p_z)/d(rho_z)^2.
+        d2ppdppCompact2 : array-like
+            Second derivative d^2(p_par)/d(rho_par)^2.
+        """ 
+
+        d2zdzCompact2 = 3 * self.positionFalloff * zCompact / (1 - zCompact**2) ** 2.5
+        d2pzdpzCompact2 = 4 * self.momentumFalloffT * pzCompact / (1 - pzCompact**2) ** 2
+        d2ppdppCompact2 = self.momentumFalloffT / (1 - ppCompact)**2
+
+        return d2zdzCompact2, d2pzdpzCompact2, d2ppdppCompact2
+
+    

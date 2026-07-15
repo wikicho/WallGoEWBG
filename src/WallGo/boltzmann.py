@@ -1542,7 +1542,7 @@ class EWBGBoltzmannSolver:
         msq = msqFull[:, 1:-1, None, None]
         theta = thetaFull[:, 1:-1, None, None]
         energy = np.sqrt(msq + pz**2 + pp**2)
-        energy_z = np.sqrt(msq + pz**2)
+        energyZ = np.sqrt(msq + pz**2)
 
         # fluctuation mode
         statistics = np.array(
@@ -1582,7 +1582,6 @@ class EWBGBoltzmannSolver:
             ]
             dvdChi = vPoly.derivative(0).coefficients[None, 1:-1, None, None]
             dMsqdChi = msqPoly.derivative(1).coefficients[:, 1:-1, None, None]
-            d2MsqdChi2 = msqPoly.derivative(1).derivative(1).coefficients[:, 1:-1, None, None]
             dThetadChi = thetaPoly.derivative(1).coefficients[:, 1:-1, None, None]
             ddThetadChi2 = thetaPoly.derivative(1).derivative(1).coefficients[:, 1:-1, None, None]
 
@@ -1614,10 +1613,6 @@ class EWBGBoltzmannSolver:
                 derivMatrixChi.toarray()[None, :, :] * msqFull[:, None, :],
                 axis=-1,
             )[:, 1:-1, None, None]
-            d2MsqdChi2 = np.sum(
-                derivMatrixChi2.toarray()[None, :, :] * msqFull[:, None, :],
-                axis=-1,
-            )[:, 1:-1, None, None]
             dThetadChi = np.sum(
                 derivMatrixChi.toarray()[None, :, :] * thetaFull[:, None, :], axis=-1
             )[:, 1:-1, None, None]
@@ -1647,23 +1642,29 @@ class EWBGBoltzmannSolver:
         dchidxi = 1 / dxidchi[None, :, None, None]
         drzdpz = 1 / dpzdrz[None, None, :, None]
 
+        d2xidchi2, d2rz2, d2rp2 = self.grid.getCompactificationSecondDerivatives()
+        d2xidchi2xx = d2xidchi2[None, :, None, None] # naming is bit weird, so need to be fixed
+        
         # derivative of equilibrium distribution
         dfEq = EWBGBoltzmannSolver._dfeq(energyPlasma / temperature, statistics)
-
-        ##### source term #####
-        # Given by S_i on the RHS of Eq. (5) in 2204.13120, with further details
-        # given in Eq. (6).
-        source = (
-            (dfEq / temperature)
-            * dchidxi
-            * (
-                momentumWall * momentumPlasma * gammaPlasma**2 * dvdChi
-                + momentumWall * energyPlasma * dTemperaturedChi / temperature
-                + 1 / 2 * dMsqdChi * uwBaruPl
-            )
-        )
+        d2feq = EWBGBoltzmannSolver._d2feq(energyPlasma / temperature, statistics)
 
         ##### source term for CP-violating part of the Boltzmann equation #####
+
+        helicity = 1 # for the - helicity state what can we do?
+        gammaParallel = energy / energyZ
+        sp = gammaParallel * pz / np.sqrt(pz**2 + pp**2) 
+
+        forceOdd = 0.5 * helicity * sp * (dThetadChi * dMsqdChi * dchidxi **2 + ddThetadChi2 * msq * dchidxi ** 2 - msq * dchidxi ** 3 * d2xidchi2xx * dThetadChi) / energyZ
+        deltaEnergy = 0.5 * helicity * sp * dThetadChi * dMsqdChi * dchidxi / energyZ / energy
+        ddeltaEnergydxi = 0.5 * helicity * sp * (dThetadChi * dMsqdChi * dchidxi **2 + ddThetadChi2 * msq * dchidxi ** 2 - msq * dchidxi ** 3 * d2xidchi2xx * dThetadChi) / energyZ / energy
+
+        source = - dfEq * gammaPlasma * v / temperature * forceOdd
+        source = source - momentumWall * d2feq *  (- (momentumPlasma * gammaPlasma**2 * dvdChi + energyPlasma * dTemperaturedChi / temperature) / temperature) * gammaPlasma / temperature * deltaEnergy
+        source = source - momentumWall * dfeq * (gammaPlasma**3 * v * dvdChi * dchidxi / temperature - gammaPlasma * dTemperaturedChi * dchidxi / temperature**2) * deltaEnergy
+        source = source - momentumWall * dfeq * gammaPlasma / temperature * ddeltaEnergydxi
+        source = source + 1 / 2 * dMsqdChi * dchidxi * d2feq * (-gammaPlasma ** 2 * v / temperature ** 2) * deltaEnergy
+
 
         ##### liouville operator #####
         # Given in the LHS of Eq. (5) in 2204.13120, with further details given
