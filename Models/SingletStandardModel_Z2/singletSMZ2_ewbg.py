@@ -380,6 +380,96 @@ class SingletSMZ2_EWBG(WallGoExampleBase):
     # ~ End WallGoExampleBase interface
 
 
+class SingletSMZ2_EWBG_Custom():
+
+    def __init__(self):
+        return None
+
+    manager = WallGo.WallGoManager()
+
+    # Change the amount of grid points in the spatial coordinates
+    # for faster computations
+    manager.config.configGrid.spatialGridSize = 20
+    # Increase the number of iterations in the wall solving to 
+    # ensure convergence
+    manager.config.configEOM.maxIterations = 25
+    # Decrease error tolerance for phase tracing to ensure stability
+    manager.config.configThermodynamics.phaseTracerTol = 1e-8
+
+    pathtoCollisions = pathlib.Path(__file__).resolve().parent / pathlib.Path(
+        f"CollisionOutput_N11"
+    )
+    manager.setPathToCollisionData(pathtoCollisions)
+
+    model = SingletSM_CPVdim5(allowOutOfEquilibriumGluon=False)
+    manager.registerModel(model)
+
+    inputParameters = {
+                    "RGScale": 125.0,
+                    "v0": 246.0,
+                    "MW": 80.379,
+                    "MZ": 91.1876,
+                    "Mt": 173.0,
+                    "g3": 1.2279920495357861,
+                    "mh1": 125.0,
+                    "mh2": 120.0,
+                    "lHS": 0.9,
+                    "lSS": 1.0,
+                    "Lambda": 1000.0,
+    }
+
+    model.modelParameters.update(inputParameters)
+
+    manager.setupThermodynamicsHydrodynamics(
+        WallGo.PhaseInfo(
+            temperature=100.0,  # nucleation temperature
+            phaseLocation1=WallGo.Fields([0.0, 200.0]),
+            phaseLocation2=WallGo.Fields([246.0, 0.0]),
+        ),
+        WallGo.VeffDerivativeSettings(
+            temperatureVariationScale=10.0,
+            fieldValueVariationScale=[10.0, 10.0],
+        ),
+ 
+    )
+
+    # ---- Solve wall speed in Local Thermal Equilibrium (LTE) approximation
+    vwLTE = manager.wallSpeedLTE()
+    print(f"LTE wall speed:    {vwLTE:.6f}")
+
+    solverSettings = WallGo.WallSolverSettings(
+       WallGo.WallSolverSettings(
+            # we actually do both cases in the common example
+            bIncludeOffEquilibrium=True,
+            meanFreePathScale=50.0,  # In units of 1/Tnucl
+            wallThicknessGuess=5.0,  # In units of 1/Tnucl
+        ),
+    )
+
+    results = manager.solveWall(solverSettings)
+
+    print(
+        f"Wall velocity without out-of-equilibrium contributions {results.wallVelocity:.6f}"
+    )
+
+    solverSettings.bIncludeOffEquilibrium = True
+
+    results = manager.solveWall(solverSettings)
+
+    velocityProfile = results.velocityProfile
+    temperatureProfile = results.temperatureProfile
+    wallVelocity = results.wallVelocity
+    fieldProfile = results.fieldProfile
+
+    print(
+        f"Wall velocity with out-of-equilibrium contributions {results.wallVelocity:.6f}"
+    )
+
+    # EWBG input 
+    
+
+
+
 if __name__ == "__main__":
-    example = SingletSMZ2_EWBG()
+    example = SingletSMZ2_EWBG_Custom()
     example.runExample()

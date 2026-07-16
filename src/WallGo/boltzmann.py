@@ -903,6 +903,7 @@ class EWBGBoltzmannSolver:
     background: BoltzmannBackground
     collisionArray: CollisionArray
     truncationOption: ETruncationOption
+    wallGoResults: WallGoResults
 
     def __init__(
         self,
@@ -968,6 +969,7 @@ class EWBGBoltzmannSolver:
         self.collisionArray = None  # type: ignore[assignment]
         self.offEqParticles = []
 
+    # this should be verified since we do not know the which frame is used in the wallGoResults
     def setBackground(self, background: BoltzmannBackground) -> None:
         """
         Setter for the BoltzmannBackground
@@ -992,6 +994,25 @@ class EWBGBoltzmannSolver:
             assert isinstance(p, ComplexMassParticle)
 
         self.offEqParticles = offEqParticles
+
+    def setWallGoResults(
+        self,
+        wallGoResults: WallGoResults,
+    ) -> None:
+        """
+        Import a converged WallGo solution.
+
+        The WallGo result supplies the wall velocity, scalar profiles,
+        temperature profile, and plasma-velocity profile required by the
+        EWBG Boltzmann equation.
+        """
+        if wallGoResults is None:
+            raise ValueError("wallGoResults cannot be None.")
+
+        self.wallGoResults = deepcopy(wallGoResults)
+
+        background = self._backgroundFromWallGoResults(self.wallGoResults)
+        self.setBackground(background, boostToPlasmaFrame=True)
 
     def getDeltas(
         self,
@@ -1521,6 +1542,7 @@ class EWBGBoltzmannSolver:
         # chi, rz, rp = self.grid.getCompactCoordinates(endpoints=False)
 
         # background profiles
+        #
         temperatureFull = self.background.temperatureProfile
         vFull = self.background.velocityProfile
         msqFull = np.array(
@@ -1656,11 +1678,11 @@ class EWBGBoltzmannSolver:
         sp = gammaParallel * pz / np.sqrt(pz**2 + pp**2) 
 
         forceOdd = 0.5 * helicity * sp * (dThetadChi * dMsqdChi * dchidxi **2 + ddThetadChi2 * msq * dchidxi ** 2 - msq * dchidxi ** 3 * d2xidchi2xx * dThetadChi) / energyZ
-        deltaEnergy = 0.5 * helicity * sp * dThetadChi * dMsqdChi * dchidxi / energyZ / energy
+        deltaEnergy = 0.5 * helicity * sp * dThetadChi * msq * dchidxi / energyZ / energy
         ddeltaEnergydxi = 0.5 * helicity * sp * (dThetadChi * dMsqdChi * dchidxi **2 + ddThetadChi2 * msq * dchidxi ** 2 - msq * dchidxi ** 3 * d2xidchi2xx * dThetadChi) / energyZ / energy
 
         source = - dfEq * gammaPlasma * v / temperature * forceOdd
-        source = source - momentumWall * d2feq *  (- (momentumPlasma * gammaPlasma**2 * dvdChi + energyPlasma * dTemperaturedChi / temperature) / temperature) * gammaPlasma / temperature * deltaEnergy
+        source = source - momentumWall * d2feq *  (- (momentumPlasma * gammaPlasma**2 * dvdChi + energyPlasma * dTemperaturedChi / temperature) / temperature) * dchidxi * gammaPlasma / temperature * deltaEnergy
         source = source - momentumWall * dfeq * (gammaPlasma**3 * v * dvdChi * dchidxi / temperature - gammaPlasma * dTemperaturedChi * dchidxi / temperature**2) * deltaEnergy
         source = source - momentumWall * dfeq * gammaPlasma / temperature * ddeltaEnergydxi
         source = source + 1 / 2 * dMsqdChi * dchidxi * d2feq * (-gammaPlasma ** 2 * v / temperature ** 2) * deltaEnergy
