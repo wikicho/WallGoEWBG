@@ -380,7 +380,8 @@ class SingletSMZ2_EWBG(WallGoExampleBase):
     # ~ End WallGoExampleBase interface
 
 
-class SingletSMZ2_EWBG_Custom():
+# main function to run the example
+def main():
 
     def __init__(self):
         return None
@@ -399,6 +400,16 @@ class SingletSMZ2_EWBG_Custom():
     pathtoCollisions = pathlib.Path(__file__).resolve().parent / pathlib.Path(
         f"CollisionOutput_N11"
     )
+    if not pathtoCollisions.exists():
+        print(
+            f"Collision data not found at {pathtoCollisions}. Please run the collision integrals first."
+        )
+        return exit(1)  
+
+    # option을 만드는게 좋을듯?
+    # --recalculateCollisions --momentumGridSize 5 같은 옵션을 받는 부분이 있었는데 분명
+    
+
     manager.setPathToCollisionData(pathtoCollisions)
 
     model = SingletSM_CPVdim5(allowOutOfEquilibriumGluon=False)
@@ -471,5 +482,4 @@ class SingletSMZ2_EWBG_Custom():
 
 
 if __name__ == "__main__":
-    example = SingletSMZ2_EWBG_Custom()
-    example.runExample()
+    main()

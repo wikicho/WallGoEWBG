@@ -749,3 +749,57 @@ class WallGoManager:
             maxIterations=maxIterations,
             pressRelErrTol=pressRelErrTol,
         )
+
+@dataclass
+class EWBGSolver:
+    """
+    Data class containing classes and settings for the EWBG calculation.
+    """
+
+    eom: EOM
+    """EOM object"""
+
+    grid: Grid3Scales
+    """Grid3Scales object used to describe the mapping between the physical
+    coordinates to the compact ones."""
+
+    boltzmannSolver: BoltzmannSolver
+    """ BoltzmannSolver object used to solve the Boltzmann equation."""
+
+    initialWallThickness: float
+    """Initial wall thickness used by the solver. Should be expressed in physical
+    units (the units used in :py:class:`WallGo.EffectivePotential`)."""
+
+    EWBGBoltzmannSolver: WallGo.EWBGBoltzmannSolver
+    """ EWBGBoltzmannSolver object used to solve the EWBG Boltzmann
+    equation."""
+
+
+class EWBGWallGoManager:
+    """Manages WallGo program flow
+
+    The WallGoManager is a 'control' class which collects together and manages
+    all the various parts of the WallGo Python package for the computation of
+    the bubble wall velocity.
+    """
+
+    def __init__(self) -> None:
+        """"""
+
+        # Initialise the configs with the default values
+        self.config = Config()
+
+        # Set the default verbosity level to logging.INFO
+        self.setVerbosity(logging.INFO)
+
+        # default to working directory
+        self.collisionDirectory = pathlib.Path.cwd()
+
+        # These we currently have to keep cached, otherwise we can't construct
+        # a sensible WallSolver:
+        ## TODO init these to None or have other easy way of checking if they
+        ## have been properly initialized
+        self.model: GenericModel
+        self.hydrodynamics: Hydrodynamics
+        self.phasesAtTn: PhaseInfo
+        self.thermodynamics: Thermodynamics
