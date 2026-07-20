@@ -15,7 +15,7 @@ from .grid import Grid
 from .polynomial import Polynomial, SpectralConvergenceInfo
 from .particle import Particle, ComplexMassParticle
 from .collisionArray import CollisionArray
-from .results import BoltzmannResults
+from .results import BoltzmannResults, WallGoResults
 from .exceptions import CollisionLoadError
 
 if typing.TYPE_CHECKING:
@@ -1021,8 +1021,9 @@ class EWBGBoltzmannSolver:
         background = BoltzmannBackground(
             velocityMid=velocityMid,
             velocityProfile=self.wallGoResults.velocityProfile,
+            fieldProfiles=self.wallGoResults.fieldProfiles,
             temperatureProfile=self.wallGoResults.temperatureProfile,
-            polynomialBasis=polynomialBasis,
+            polynomialBasis=self.basisM, # this should be verified. Also, this is not from the WallGoResults.
         )
 
         bg = deepcopy(background)
@@ -1702,8 +1703,8 @@ class EWBGBoltzmannSolver:
 
         source = - dfEq * gammaPlasma * v / temperature * forceOdd
         source = source - momentumWall * d2feq *  (- (momentumPlasma * gammaPlasma**2 * dvdChi + energyPlasma * dTemperaturedChi / temperature) / temperature) * dchidxi * gammaPlasma / temperature * deltaEnergy
-        source = source - momentumWall * dfeq * (gammaPlasma**3 * v * dvdChi * dchidxi / temperature - gammaPlasma * dTemperaturedChi * dchidxi / temperature**2) * deltaEnergy
-        source = source - momentumWall * dfeq * gammaPlasma / temperature * ddeltaEnergydxi
+        source = source - momentumWall * dfEq * (gammaPlasma**3 * v * dvdChi * dchidxi / temperature - gammaPlasma * dTemperaturedChi * dchidxi / temperature**2) * deltaEnergy
+        source = source - momentumWall * dfEq * gammaPlasma / temperature * ddeltaEnergydxi
         source = source + 1 / 2 * dMsqdChi * dchidxi * d2feq * (-gammaPlasma ** 2 * v / temperature ** 2) * deltaEnergy
 
 
