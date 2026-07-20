@@ -477,7 +477,9 @@ def main():
     )
 
     # EWBG input 
-    
+    ewbgManger = WallGo.EWBGManager(manager)
+    ewbgManger.setupEWBGSolver(
+
 
 
 

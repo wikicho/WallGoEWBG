@@ -10,7 +10,7 @@ import numpy as np
 
 # WallGo imports
 import WallGo
-from .boltzmann import BoltzmannSolver, ETruncationOption
+from .boltzmann import BoltzmannSolver, EWBGBoltzmannSolver, ETruncationOption
 from .containers import PhaseInfo
 from .equationOfMotion import EOM
 from .exceptions import WallGoError, WallGoPhaseValidationError
@@ -775,31 +775,86 @@ class EWBGSolver:
     equation."""
 
 
-class EWBGWallGoManager:
-    """Manages WallGo program flow
-
-    The WallGoManager is a 'control' class which collects together and manages
-    all the various parts of the WallGo Python package for the computation of
-    the bubble wall velocity.
+class EWBGWallGoManager(WallGoManager):
+    """Extends WallGoManager with the tools needed to compute electroweak
+    baryogenesis source terms from a converged wall solution.
     """
 
-    def __init__(self) -> None:
-        """"""
+    def setupEWBGSolver(
+        self,
+        wallSolver: WallSolver,
+        wallGoResults: WallGoResults,
+    ) -> EWBGSolver:
+        r"""
+        Builds an EWBGBoltzmannSolver for computing baryogenesis source terms.
 
-        # Initialise the configs with the default values
-        self.config = Config()
+        Reuses the grid from an already-solved WallSolver so that it matches
+        the profiles stored in wallGoResults, and derives velocityMid from
+        the same hydrodynamic matching used internally by the EOM solver.
 
-        # Set the default verbosity level to logging.INFO
-        self.setVerbosity(logging.INFO)
+        Parameters
+        ----------
+        wallSolver : WallSolver
+            The WallSolver (from :py:meth:`WallGoManager.setupWallSolver`) used
+            to obtain wallGoResults.
+        wallGoResults : WallGoResults
+            A converged wall solution, e.g. from :py:meth:`WallGoManager.solveWall`.
 
-        # default to working directory
-        self.collisionDirectory = pathlib.Path.cwd()
+        Returns
+        -------
+        EWBGSolver
+            Data class bundling the EOM, grid, BoltzmannSolver and a
+            EWBGBoltzmannSolver loaded with the converged background.
+        """
+        collisionMultiplier = self.config.configBoltzmannSolver.collisionMultiplier
+        truncationOption = ETruncationOption[
+            self.config.configBoltzmannSolver.truncationOption
+        ]
 
-        # These we currently have to keep cached, otherwise we can't construct
-        # a sensible WallSolver:
-        ## TODO init these to None or have other easy way of checking if they
-        ## have been properly initialized
-        self.model: GenericModel
-        self.hydrodynamics: Hydrodynamics
-        self.phasesAtTn: PhaseInfo
-        self.thermodynamics: Thermodynamics
+        ewbgBoltzmannSolver = EWBGBoltzmannSolver(
+            wallSolver.grid,
+            basisM="Cardinal",
+            basisN="Chebyshev",
+            collisionMultiplier=collisionMultiplier,
+            truncationOption=truncationOption,
+        )
+        ewbgBoltzmannSolver.updateParticleList(self.model.outOfEquilibriumParticles)
+        ewbgBoltzmannSolver.loadCollisions(self.collisionDirectory)
+
+        _, _, _, _, velocityMid = self.hydrodynamics.findHydroBoundaries(
+            wallGoResults.wallVelocity
+        )
+        ewbgBoltzmannSolver.setWallGoResults(wallGoResults, velocityMid)
+
+        return EWBGSolver(
+            wallSolver.eom,
+            wallSolver.grid,
+            wallSolver.boltzmannSolver,
+            wallSolver.initialWallThickness,
+            ewbgBoltzmannSolver,
+        )
+
+    def solveBoltzmannEWBG(
+        self,
+        ewbgSolver: EWBGSolver,
+    ) -> WallGoResults:
+        r"""
+        Solves the EWBG Boltzmann equation for the source terms.
+
+        Parameters
+        ----------
+        ewbgSolver : EWBGSolver
+            Data class bundling the EOM, grid, BoltzmannSolver and a
+            EWBGBoltzmannSolver loaded with the converged background.
+
+        Returns
+        -------
+        WallGoResults
+            Object containing the baryogenesis source terms and other relevant
+            quantities.
+        """
+        # return deltaF
+    
+        EWBGBoltzmannSolver.getDeltas
+
+        return ewbgSolver.EWBGBoltzmannSolver.solveBoltzmann()

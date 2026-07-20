@@ -1002,17 +1002,36 @@ class EWBGBoltzmannSolver:
         """
         Import a converged WallGo solution.
 
-        The WallGo result supplies the wall velocity, scalar profiles,
-        temperature profile, and plasma-velocity profile required by the
-        EWBG Boltzmann equation.
+        The WallGo result supplies the scalar profiles, temperature profile,
+        and plasma-velocity profile required by the EWBG Boltzmann equation.
+        velocityMid (the average of the asymptotic plasma velocities, used for
+        the boost to the plasma frame) is not stored on WallGoResults, so it
+        must be supplied by the caller, e.g. via
+        ``hydrodynamics.findHydroBoundaries(wallGoResults.wallVelocity)``.
         """
         if wallGoResults is None:
             raise ValueError("wallGoResults cannot be None.")
 
         self.wallGoResults = deepcopy(wallGoResults)
 
-        background = self._backgroundFromWallGoResults(self.wallGoResults)
-        self.setBackground(background, boostToPlasmaFrame=True)
+    def setBackground(self, velocityMid: float) -> None:
+        if self.wallGoResults is None:
+            raise ValueError("wallGoResults must be set before setting background.")
+
+        background = BoltzmannBackground(
+            velocityMid=velocityMid,
+            velocityProfile=self.wallGoResults.velocityProfile,
+            temperatureProfile=self.wallGoResults.temperatureProfile,
+            polynomialBasis=polynomialBasis,
+        )
+
+        bg = deepcopy(background)
+
+        self.background = bg
+        
+        self.background.boostToPlasmaFrame()
+
+
 
     def getDeltas(
         self,
