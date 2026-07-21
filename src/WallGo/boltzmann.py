@@ -1636,7 +1636,7 @@ class EWBGBoltzmannSolver:
             # derivative matrices
             chiFull, rzFull, _ = self.grid.getCompactCoordinates(endpoints=True)
             derivOperatorChi = findiff.FinDiff((0, chiFull, 1), acc=2)
-            derivOperatorChi = findiff.FinDiff((0, chiFull, 2), acc=2) # second order derivative for CPV source term
+            derivOperatorChi2 = findiff.FinDiff((0, chiFull, 2), acc=2) # second order derivative for CPV source term
             derivMatrixChi = derivOperatorChi.matrix((self.grid.M + 1,))
             derivMatrixChi2 = derivOperatorChi2.matrix((self.grid.M + 1,))
             derivOperatorRz = findiff.FinDiff((0, rzFull, 1), acc=2)

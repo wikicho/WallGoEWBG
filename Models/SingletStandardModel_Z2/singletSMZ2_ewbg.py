@@ -458,7 +458,7 @@ def main():
     )
 
 
-    solver: WallSolver = manager.setupWallSolver(wallSolverSettings)
+    solver: WallGo.WallSolver = manager.setupWallSolver(solverSettings)
 
  
     results = solver.eom.findWallVelocityDeflagrationHybrid(
@@ -468,7 +468,7 @@ def main():
     print(
         f"Wall velocity without out-of-equilibrium contributions {results.wallVelocity:.6f}"
     )
-
+    
     # _, _, _, _, velocityMid = manager.hydrodynamics.findHydroBoundaries(
     #     results.wallVelocity
     # )
