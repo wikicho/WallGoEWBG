@@ -819,12 +819,21 @@ class EWBGWallGoManager(WallGoManager):
             truncationOption=truncationOption,
         )
         ewbgBoltzmannSolver.updateParticleList(self.model.outOfEquilibriumParticles)
-        ewbgBoltzmannSolver.loadCollisions(self.collisionDirectory)
+
+        if wallSolver.boltzmannSolver.collisionArray is not None:
+            # Reuse the collision data already loaded for the wall solve instead
+            # of reading the same .hdf5 files from disk again.
+            ewbgBoltzmannSolver.setCollisionArray(
+                wallSolver.boltzmannSolver.collisionArray
+            )
+        else:
+            ewbgBoltzmannSolver.loadCollisions(self.collisionDirectory)
 
         _, _, _, _, velocityMid = self.hydrodynamics.findHydroBoundaries(
             wallGoResults.wallVelocity
         )
-        ewbgBoltzmannSolver.setWallGoResults(wallGoResults, velocityMid)
+
+        ewbgBoltzmannSolver.setWallGoResults(wallGoResults)
 
         return EWBGSolver(
             wallSolver.eom,
@@ -855,6 +864,4 @@ class EWBGWallGoManager(WallGoManager):
         """
         # return deltaF
     
-        EWBGBoltzmannSolver.getDeltas
-
-        return ewbgSolver.EWBGBoltzmannSolver.solveBoltzmann()
+        return ewbgSolver.EWBGBoltzmannSolver.solveBoltzmannEquations()

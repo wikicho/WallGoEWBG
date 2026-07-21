@@ -457,20 +457,35 @@ def main():
         ),
     )
 
-    results = manager.solveWall(solverSettings)
+
+    solver: WallSolver = manager.setupWallSolver(wallSolverSettings)
+
+ 
+    results = solver.eom.findWallVelocityDeflagrationHybrid(
+        solver.initialWallThickness
+    )
 
     print(
         f"Wall velocity without out-of-equilibrium contributions {results.wallVelocity:.6f}"
     )
 
-    solverSettings.bIncludeOffEquilibrium = True
+    # _, _, _, _, velocityMid = manager.hydrodynamics.findHydroBoundaries(
+    #     results.wallVelocity
+    # )
 
-    results = manager.solveWall(solverSettings)
+    # velocityProfile = results.velocityProfile
+    # temperatureProfile = results.temperatureProfile
+    # wallVelocity = results.wallVelocity
+    # fieldProfile = results.fieldProfiles
+    # spatialcoordinatePolynomialbasis = solver.boltzmannSolver.basisM
 
-    velocityProfile = results.velocityProfile
-    temperatureProfile = results.temperatureProfile
-    wallVelocity = results.wallVelocity
-    fieldProfile = results.fieldProfile
+    # background : BoltzmannBackground = BoltzmannBackground(        
+    #     velocityMid, 
+    #     velocityProfile, 
+    #     temperatureProfile, 
+    #     fieldProfile, 
+    #     spatialcoordinatePolynomialbasis
+    # )
 
     print(
         f"Wall velocity with out-of-equilibrium contributions {results.wallVelocity:.6f}"
@@ -478,8 +493,7 @@ def main():
 
     # EWBG input 
     ewbgManger = WallGo.EWBGManager(manager)
-    ewbgManger.setupEWBGSolver()
-
+    ewbgManger.setupEWBGSolver(solver, results)
 
 
 

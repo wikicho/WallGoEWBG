@@ -6,7 +6,7 @@ import importlib
 from importlib.metadata import version, PackageNotFoundError
 
 # package level modules
-from .boltzmann import BoltzmannSolver, ETruncationOption
+from .boltzmann import BoltzmannSolver, EWBGBoltzmannSolver, ETruncationOption
 from .config import Config
 from .collisionArray import CollisionArray
 from .containers import PhaseInfo, BoltzmannBackground, BoltzmannDeltas, FreeEnergyArrays, WallParams
@@ -20,7 +20,13 @@ from .grid3Scales import Grid3Scales
 from .hydrodynamics import Hydrodynamics
 from .hydrodynamicsTemplateModel import HydrodynamicsTemplateModel
 from .interpolatableFunction import InterpolatableFunction, EExtrapolationType
-from .manager import WallGoManager, WallSolverSettings
+from .manager import (
+    WallGoManager,
+    WallSolver,
+    WallSolverSettings,
+    EWBGWallGoManager,
+    EWBGSolver,
+)
 from .particle import Particle
 from .polynomial import Polynomial, SpectralConvergenceInfo
 from .thermodynamics import Thermodynamics
