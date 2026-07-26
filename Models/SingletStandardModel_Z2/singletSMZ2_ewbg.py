@@ -564,7 +564,18 @@ def main():
     # EWBG input
     ewbgSolver = manager.setupEWBGSolver(solver, results)
     manager.solveBoltzmannEWBG(ewbgSolver)
+    boltzmannResults = manager.getDeltas(ewbgSolver)
 
+    z = ewbgSolver.grid.xiValues
+    y = boltzmannResults.Deltas.Delta00.coefficients[0]
+
+    import matplotlib.pyplot as plt
+
+    plt.plot(z, y)
+    plt.xlabel(r"$z$")
+    plt.ylabel(r"$\Delta_{00}$")
+    plt.title("Top quark Delta00")
+    plt.show()
 
 if __name__ == "__main__":
     main()

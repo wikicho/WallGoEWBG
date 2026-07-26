@@ -866,3 +866,8 @@ class EWBGWallGoManager(WallGoManager):
         # return deltaF
     
         return ewbgSolver.EWBGBoltzmannSolver.solveBoltzmannEquations()
+
+    def getDeltas(self, ewbgSolver: EWBGSolver):
+        """Returns the Deltas computed by the EWBG Boltzmann solver. 
+        """
+        return ewbgSolver.EWBGBoltzmannSolver.getDeltas()
