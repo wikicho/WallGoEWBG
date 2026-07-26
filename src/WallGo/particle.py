@@ -2,6 +2,8 @@
 Module with Particle class to hold particle information
 """
 
+from __future__ import annotations
+
 import typing
 import numpy as np
 from .fields import Fields, FieldPoint
@@ -152,29 +154,28 @@ class ComplexMassParticle(Particle):
 
         self.phase = phase
 
+    @staticmethod
+    def _validateInput(  # pylint: disable=unused-argument
+        name: str,
+        index: int,
+        msqVacuum: typing.Callable[[Fields], np.ndarray],
+        msqDerivative: typing.Callable[[Fields], np.ndarray],
+        phase: typing.Callable[[Fields], np.ndarray],
+        statistics: str,
+        totalDOFs: int,
+    ) -> None:
+        """
+        Checks that the input fits expectations
+        """
 
-        @staticmethod
-        def _validateInput(  # pylint: disable=unused-argument
-            name: str,
-            index: int,
-            msqVacuum: typing.Callable[[Fields], np.ndarray],
-            msqDerivative: typing.Callable[[Fields], np.ndarray],
-            phase: typing.Callable[[Fields], np.ndarray],
-            statistics: str,
-            totalDOFs: int,
-        ) -> None:
-            """
-            Checks that the input fits expectations
-            """
+        Particle._validateInput(
+            name,
+            index,
+            msqVacuum,
+            msqDerivative,
+            statistics,
+            totalDOFs,
+        )
 
-            Particle._validateInput(
-                name,
-                index,
-                msqVacuum,
-                msqDerivative,
-                statistics,
-                totalDOFs,
-            )
-
-            if not callable(phase):
-                raise TypeError("phase must be callable")
+        if not callable(phase):
+            raise TypeError("phase must be callable")

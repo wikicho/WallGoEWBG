@@ -834,6 +834,7 @@ class EWBGWallGoManager(WallGoManager):
         )
 
         ewbgBoltzmannSolver.setWallGoResults(wallGoResults)
+        ewbgBoltzmannSolver.setBackground(velocityMid)
 
         return EWBGSolver(
             wallSolver.eom,

@@ -1573,7 +1573,7 @@ class EWBGBoltzmannSolver:
         )
 
         thetaFull = np.array(
-            [particle.theta(self.background.fieldProfiles) for particle in particles]
+            [particle.phase(self.background.fieldProfiles) for particle in particles]
         )
 
         velocityWall = self.background.velocityWall
@@ -1837,14 +1837,13 @@ class EWBGBoltzmannSolver:
     
     @staticmethod
     def _d2feq(x: np.ndarray, statistics: int | np.ndarray) -> np.ndarray:
+        """
+        Second temperature derivative of thermal distribution functions
+        """
         x = np.asarray(x)
-        out = np.zeros_like(x, dtype=float)
-
-        mask = x <= EWBGBoltzmannSolver.MAX_EXPONENT
-        exp_x = np.exp(x[mask])
-
-        out[mask] = (
-            exp_x * (exp_x + statistics)
-            / (exp_x - statistics) ** 3
+        exp_x = np.exp(x)
+        return np.where(
+            x > EWBGBoltzmannSolver.MAX_EXPONENT,
+            0,
+            exp_x * (exp_x + statistics) / (exp_x - statistics) ** 3,
         )
-        return out

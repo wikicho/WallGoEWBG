@@ -37,6 +37,7 @@ import os
 import sys
 import pathlib
 import argparse
+import logging
 from typing import TYPE_CHECKING
 import numpy as np
 
@@ -380,37 +381,62 @@ class SingletSMZ2_EWBG(WallGoExampleBase):
     # ~ End WallGoExampleBase interface
 
 
+def initCommandLineArgs() -> argparse.ArgumentParser:
+    """Command line arguments for main()."""
+    argParser = argparse.ArgumentParser()
+
+    argParser.add_argument(
+        "--momentumGridSize",
+        type=int,
+        default=0,
+        help="""Basis size N override for the momentum grid. Values less than
+        or equal to 0 are ignored and we fall back to the default (N=11),
+        including for the collision data directory name.""",
+    )
+
+    argParser.add_argument(
+        "-v",
+        "--verbose",
+        type=int,
+        default=logging.DEBUG,
+        help="""Set the verbosity level. Must be an int: DEBUG=10, INFO=20,
+        WARNING=30, ERROR=40. Default is DEBUG.""",
+    )
+
+    argParser.add_argument(
+        "--recalculateCollisions",
+        action="store_true",
+        help="""Forces full recalculation of the relevant collision integrals
+        instead of loading the provided data files for this example. This is
+        very slow and disabled by default. The resulting collision data will
+        be written to a directory labeled _UserGenerated; the default
+        provided data will not be overwritten.""",
+    )
+
+    return argParser
+
+
 # main function to run the example
 def main():
 
-    def __init__(self):
-        return None
+    argParser = initCommandLineArgs()
+    cmdArgs = argParser.parse_args()
 
-    manager = WallGo.WallGoManager()
+    momentumGridSize = cmdArgs.momentumGridSize if cmdArgs.momentumGridSize > 0 else 11
+
+    manager = WallGo.EWBGWallGoManager()
+    manager.setVerbosity(cmdArgs.verbose)
 
     # Change the amount of grid points in the spatial coordinates
     # for faster computations
     manager.config.configGrid.spatialGridSize = 20
-    # Increase the number of iterations in the wall solving to 
+    if cmdArgs.momentumGridSize > 0:
+        manager.config.configGrid.momentumGridSize = cmdArgs.momentumGridSize
+    # Increase the number of iterations in the wall solving to
     # ensure convergence
     manager.config.configEOM.maxIterations = 25
     # Decrease error tolerance for phase tracing to ensure stability
     manager.config.configThermodynamics.phaseTracerTol = 1e-8
-
-    pathtoCollisions = pathlib.Path(__file__).resolve().parent / pathlib.Path(
-        f"CollisionOutput_N11"
-    )
-    if not pathtoCollisions.exists():
-        print(
-            f"Collision data not found at {pathtoCollisions}. Please run the collision integrals first."
-        )
-        return exit(1)  
-
-    # option을 만드는게 좋을듯?
-    # --recalculateCollisions --momentumGridSize 5 같은 옵션을 받는 부분이 있었는데 분명
-    
-
-    manager.setPathToCollisionData(pathtoCollisions)
 
     model = SingletSM_CPVdim5(allowOutOfEquilibriumGluon=False)
     manager.registerModel(model)
@@ -429,7 +455,54 @@ def main():
                     "Lambda": 1000.0,
     }
 
-    model.modelParameters.update(inputParameters)
+    model.updateModel(inputParameters)
+
+    exampleHelper = SingletSMZ2_EWBG()
+
+    if cmdArgs.recalculateCollisions:
+        newCollisionDir = pathlib.Path(__file__).resolve().parent / (
+            f"CollisionOutput_N{momentumGridSize}_UserGenerated"
+        )
+        manager.setPathToCollisionData(newCollisionDir)
+
+        collisionModel = exampleHelper.initCollisionModel(model)
+
+        if not collisionModel.loadMatrixElements(
+            str(exampleHelper.matrixElementFile), True
+        ):
+            print("FATAL: Failed to load matrix elements")
+            return exit(1)
+
+        collisionTensor = collisionModel.createCollisionTensor(momentumGridSize)
+        exampleHelper.configureCollisionIntegration(collisionTensor)
+
+        print(
+            "Entering collision integral computation, this may take long",
+            flush=True,
+        )
+        collisionResults = collisionTensor.computeIntegralsAll()
+        collisionResults.writeToIndividualHDF5(
+            str(manager.getCurrentCollisionDirectory())
+        )
+    else:
+        exampleDir = pathlib.Path(__file__).resolve().parent
+        pathtoCollisions = exampleDir / f"CollisionOutput_N{momentumGridSize}"
+        pathtoUserGeneratedCollisions = exampleDir / (
+            f"CollisionOutput_N{momentumGridSize}_UserGenerated"
+        )
+
+        if not pathtoCollisions.exists() and pathtoUserGeneratedCollisions.exists():
+            pathtoCollisions = pathtoUserGeneratedCollisions
+
+        if not pathtoCollisions.exists():
+            print(
+                f"Collision data not found at {pathtoCollisions} or "
+                f"{pathtoUserGeneratedCollisions}. Please run with "
+                "--recalculateCollisions, or check --momentumGridSize."
+            )
+            return exit(1)
+
+        manager.setPathToCollisionData(pathtoCollisions)
 
     manager.setupThermodynamicsHydrodynamics(
         WallGo.PhaseInfo(
@@ -449,12 +522,9 @@ def main():
     print(f"LTE wall speed:    {vwLTE:.6f}")
 
     solverSettings = WallGo.WallSolverSettings(
-       WallGo.WallSolverSettings(
-            # we actually do both cases in the common example
-            bIncludeOffEquilibrium=True,
-            meanFreePathScale=50.0,  # In units of 1/Tnucl
-            wallThicknessGuess=5.0,  # In units of 1/Tnucl
-        ),
+        bIncludeOffEquilibrium=True,
+        meanFreePathScale=50.0,  # In units of 1/Tnucl
+        wallThicknessGuess=5.0,  # In units of 1/Tnucl
     )
 
 
@@ -491,10 +561,9 @@ def main():
         f"Wall velocity with out-of-equilibrium contributions {results.wallVelocity:.6f}"
     )
 
-    # EWBG input 
-    ewbgManger = WallGo.EWBGManager(manager)
-    ewbgManger.setupEWBGSolver(solver, results)
-
+    # EWBG input
+    ewbgSolver = manager.setupEWBGSolver(solver, results)
+    manager.solveBoltzmannEWBG(ewbgSolver)
 
 
 if __name__ == "__main__":

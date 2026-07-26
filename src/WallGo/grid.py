@@ -299,11 +299,11 @@ class Grid:
             Grid of the :math:`\partial_{p_\Vert}^2\rho_\Vert` direction.
         """
         if endpoints:
-            d2xdchi2 = np.array([np.inf] + list(self.d2xdchi2) + [np.inf])
+            d2xidchi2 = np.array([np.inf] + list(self.d2xidchi2) + [np.inf])
             d2pdzdrz2 = np.array([np.inf] + list(self.d2pdzdrz2) + [np.inf])
             d2ppdrp2 = np.array(list(self.d2ppdrp2) + [np.inf])
-            return d2xdchi2, d2pdzdrz2, d2ppdrp2
-        return self.d2xdchi2, self.d2pdzdrz2, self.d2ppdrp2
+            return d2xidchi2, d2pdzdrz2, d2ppdrp2
+        return self.d2xidchi2, self.d2pdzdrz2, self.d2ppdrp2
 
     def compactify(
             self,
