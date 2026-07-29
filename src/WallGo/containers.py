@@ -186,6 +186,14 @@ class BoltzmannDeltas:
     r"""Relativistically invariant integral over
     :math:`\mathcal{E}_\text{pl}\mathcal{P}_\text{pl}\delta f`."""
 
+    Delta10: Polynomial | None = None  # pylint: disable=invalid-name
+    r"""Number-density moment
+    :math:`\int d^3p/(2\pi)^3\,\delta f` in the local plasma frame.
+
+    This is optional because the original wall-friction calculation only
+    requires ``Delta00``, ``Delta02``, ``Delta20`` and ``Delta11``.
+    """
+
     # string literal type hints as class not defined yet
     def __mul__(self, number: float) -> "BoltzmannDeltas":
         """
@@ -196,6 +204,7 @@ class BoltzmannDeltas:
             Delta02=number * self.Delta02,
             Delta20=number * self.Delta20,
             Delta11=number * self.Delta11,
+            Delta10=None if self.Delta10 is None else number * self.Delta10,
         )
 
     def __rmul__(self, number: float) -> "BoltzmannDeltas":
@@ -207,6 +216,7 @@ class BoltzmannDeltas:
             Delta02=number * self.Delta02,
             Delta20=number * self.Delta20,
             Delta11=number * self.Delta11,
+            Delta10=None if self.Delta10 is None else number * self.Delta10,
         )
 
     def __add__(self, other: "BoltzmannDeltas") -> "BoltzmannDeltas":
@@ -218,6 +228,11 @@ class BoltzmannDeltas:
             Delta02=other.Delta02 + self.Delta02,
             Delta20=other.Delta20 + self.Delta20,
             Delta11=other.Delta11 + self.Delta11,
+            Delta10=(
+                None
+                if self.Delta10 is None or other.Delta10 is None
+                else other.Delta10 + self.Delta10
+            ),
         )
 
     def __sub__(self, other: "BoltzmannDeltas") -> "BoltzmannDeltas":

@@ -5,6 +5,7 @@ import pytest  # for tests
 import numpy as np  # arrays and maths
 import pathlib
 import WallGo
+from WallGo.particle import ComplexMassParticle
 
 
 real_path = pathlib.Path(__file__)
@@ -123,6 +124,95 @@ def test_solution(
 
     # asserting solution works
     assert ratio == pytest.approx(0, abs=1e-14)
+
+
+@pytest.mark.parametrize("spatialGridSize", [3])
+def test_ewbg_solution_keeps_helicity_index(
+    boltzmannTestBackground: WallGo.BoltzmannBackground,
+    spatialGridSize: int,
+) -> None:
+    """The CP-odd EWBG source and solution must be odd in helicity."""
+
+    momentumGridSize = 3
+    grid = WallGo.grid.Grid(spatialGridSize, momentumGridSize, 1, 1)
+    particle = ComplexMassParticle(
+        name="top",
+        index=0,
+        msqVacuum=lambda fields: 0.5 * fields.getField(0) ** 2,
+        msqDerivative=lambda fields: np.transpose([fields.getField(0)]),
+        phase=lambda fields: 0.2 * fields.getField(0),
+        statistics="Fermion",
+        totalDOFs=12,
+    )
+
+    boltzmann = WallGo.EWBGBoltzmannSolver(
+        grid,
+        basisM="Cardinal",
+        basisN="Cardinal",
+        truncationOption=WallGo.ETruncationOption.NONE,
+    )
+    boltzmann.updateParticleList([particle])
+    # EWBGBoltzmannSolver normally constructs this background from WallGoResults.
+    # Assign the analytic test background directly to keep this a focused unit test.
+    boltzmann.background = boltzmannTestBackground
+    boltzmann.background.boostToPlasmaFrame()
+    collisionArray = WallGo.CollisionArray(grid, "Cardinal", [particle])
+    collisionArray.polynomialData.coefficients.fill(0)
+    for pzIndex in range(momentumGridSize - 1):
+        for ppIndex in range(momentumGridSize - 1):
+            collisionArray.polynomialData.coefficients[
+                0, pzIndex, ppIndex, 0, pzIndex, ppIndex
+            ] = 1
+    boltzmann.setCollisionArray(collisionArray)
+
+    operator, source, _, _ = boltzmann.buildLinearEquations()
+
+    assert tuple(boltzmann.helicities) == (-1, 1)
+    assert source.shape == (operator.shape[0], 2)
+    assert np.linalg.norm(source[:, 0]) > 0
+    np.testing.assert_allclose(source[:, 0], -source[:, 1])
+
+    deltaF = boltzmann.solveBoltzmannEquations()
+    assert deltaF.shape == (
+        1,
+        2,
+        spatialGridSize - 1,
+        momentumGridSize - 1,
+        momentumGridSize - 1,
+    )
+    np.testing.assert_allclose(deltaF[:, 0], -deltaF[:, 1])
+
+    for helicity in boltzmann.helicities:
+        helicityIndex = boltzmann.getHelicityIndex(helicity)
+        residual = (
+            operator @ deltaF[:, helicityIndex].reshape(-1)
+            - source[:, helicityIndex]
+        )
+        relativeResidual = np.linalg.norm(residual) / np.linalg.norm(
+            source[:, helicityIndex]
+        )
+        assert relativeResidual < 1e-13
+
+    results = boltzmann.getDeltas(deltaF)
+    assert results.Deltas.Delta10 is not None
+    assert results.Deltas.Delta10.coefficients.shape == (
+        1,
+        2,
+        spatialGridSize - 1,
+    )
+    np.testing.assert_allclose(
+        results.Deltas.Delta10.coefficients[:, 0],
+        -results.Deltas.Delta10.coefficients[:, 1],
+    )
+    assert np.all(np.isfinite(boltzmann.checkLinearization(deltaF)))
+
+
+@pytest.mark.parametrize("helicities", [(), (-1, -1), (0, 1)])
+def test_ewbg_rejects_invalid_helicities(helicities: tuple[int, ...]) -> None:
+    """Only unique physical helicities can be configured."""
+    grid = WallGo.grid.Grid(3, 3, 1, 1)
+    with pytest.raises(ValueError, match="helicities"):
+        WallGo.EWBGBoltzmannSolver(grid, helicities=helicities)
 
 
 @pytest.mark.parametrize("spatialGridSize, momentumGridSize, slope", [(7, 9, -0.1), (9, 9, -0.1), (11, 9, 0.1)])

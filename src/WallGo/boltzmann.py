@@ -904,6 +904,7 @@ class EWBGBoltzmannSolver:
     collisionArray: CollisionArray
     truncationOption: ETruncationOption
     wallGoResults: WallGoResults
+    helicities: np.ndarray
 
     def __init__(
         self,
@@ -913,6 +914,7 @@ class EWBGBoltzmannSolver:
         derivatives: str = "Spectral",
         collisionMultiplier: float = 1.0,
         truncationOption: ETruncationOption = ETruncationOption.AUTO,
+        helicities: tuple[int, ...] = (-1, 1),
     ):
         """
         Initialisation of EWBGBoltzmannSolver
@@ -938,6 +940,10 @@ class EWBGBoltzmannSolver:
             Option for truncating the spectral expansion. Default is
             ETruncationOption.AUTO. Other options
             are ETruncationOption.NONE and ETruncationOption.THIRD.
+        helicities : tuple[int, ...], optional
+            Helicity eigenvalues to solve for. Each value must be either
+            ``-1`` or ``1`` and values may not be repeated. The default solves
+            both helicities in the order ``(-1, 1)``.
 
         Returns
         -------
@@ -962,12 +968,32 @@ class EWBGBoltzmannSolver:
 
         self.collisionMultiplier = collisionMultiplier
         self.truncationOption = truncationOption
+        if (
+            not helicities
+            or len(set(helicities)) != len(helicities)
+            or any(helicity not in (-1, 1) for helicity in helicities)
+        ):
+            raise ValueError(
+                "helicities must contain unique values chosen from (-1, 1)."
+            )
+        self.helicities = np.asarray(helicities, dtype=int)
+        self.helicities.setflags(write=False)
 
         # These are set, and can be updated, by our member functions
         # TODO: are these None types the best way to go?
         self.background = None  # type: ignore[assignment]
         self.collisionArray = None  # type: ignore[assignment]
         self.offEqParticles = []
+
+    def getHelicityIndex(self, helicity: int) -> int:
+        """Return the array index corresponding to helicity ``-1`` or ``1``."""
+        matches = np.flatnonzero(self.helicities == helicity)
+        if matches.size == 0:
+            raise ValueError(
+                f"Helicity {helicity} was not configured; available values are "
+                f"{tuple(self.helicities)}."
+            )
+        return int(matches[0])
 
     # this should be verified since we do not know the which frame is used in the wallGoResults
     def setBackground(self, background: BoltzmannBackground) -> None:
@@ -1046,14 +1072,15 @@ class EWBGBoltzmannSolver:
         Parameters
         ----------
         deltaF : array_like, optional
-            The deviation of the distribution function from local thermal
-            equilibrium.
+            Helicity-resolved deviation from local thermal equilibrium, with
+            axes ``(particle, helicity, z, pz, pp)``.
 
         Returns
         -------
         Deltas : BoltzmannDeltas
-            Defined in equation (15) of [LC22]_. A collection of 4 arrays,
-            each of which is of size :py:data:`len(z)`.
+            The four moments defined in equation (15) of [LC22]_, plus the
+            helicity-resolved number-density moment ``Delta10``. Each moment
+            has axes ``(particle, helicity, z)``.
         """
         # checking if result pre-computed
         if deltaF is None:
@@ -1062,14 +1089,14 @@ class EWBGBoltzmannSolver:
         # checking spectral convergence
         deltaF, shapeTruncated, spectralPeaks = self.checkSpectralConvergence(deltaF)
 
-        # getting (optimistic) estimate of truncfation error
+        # getting (optimistic) estimate of truncation error
         truncationError = self.estimateTruncationError(
             deltaF, shapeTruncated
         )
         truncatedTail = (
-            shapeTruncated[1] != deltaF.shape[1],
             shapeTruncated[2] != deltaF.shape[2],
             shapeTruncated[3] != deltaF.shape[3],
+            shapeTruncated[4] != deltaF.shape[4],
         )
 
         particles = self.offEqParticles
@@ -1078,11 +1105,13 @@ class EWBGBoltzmannSolver:
         deltaFPoly = Polynomial(
             deltaF,
             self.grid,
-            ("Array", self.basisM, self.basisN, self.basisN),
-            ("Array", "z", "pz", "pp"),
+            ("Array", "Array", self.basisM, self.basisN, self.basisN),
+            ("Array", "Array", "z", "pz", "pp"),
             False,
         )
-        deltaFPoly.changeBasis(("Array", "Cardinal", "Cardinal", "Cardinal"))
+        deltaFPoly.changeBasis(
+            ("Array", "Array", "Cardinal", "Cardinal", "Cardinal")
+        )
 
         # Take all field-space points, but throw the boundary points away
         # TODO: LN: why throw away boundary points?
@@ -1092,36 +1121,43 @@ class EWBGBoltzmannSolver:
 
         # adding new axes, to make everything rank 3 like deltaF (z, pz, pp)
         # for fast multiplication of arrays, using numpy's broadcasting rules
-        pz = self.grid.pzValues[None, None, :, None]
-        pp = self.grid.ppValues[None, None, None, :]
+        pz = self.grid.pzValues[None, None, None, :, None]
+        pp = self.grid.ppValues[None, None, None, None, :]
         msq = np.array([particle.msqVacuum(field) for particle in particles])[
-            :, :, None, None
+            :, None, :, None, None
         ]
         # constructing energy with (z, pz, pp) axes
         energy = np.sqrt(msq + pz**2 + pp**2)
 
         _, dpzdrz, dppdrp = self.grid.getCompactificationDerivatives()
-        dpzdrz = dpzdrz[None, None, :, None]
-        dppdrp = dppdrp[None, None, None, :]
+        dpzdrz = dpzdrz[None, None, None, :, None]
+        dppdrp = dppdrp[None, None, None, None, :]
 
         # base integrand, for '00'
         integrand = dpzdrz * dppdrp * pp / (4 * np.pi**2 * energy)
 
         Delta00 = deltaFPoly.integrate(  # pylint: disable=invalid-name
-            (2, 3), integrand
+            (3, 4), integrand
         )
         Delta02 = deltaFPoly.integrate(  # pylint: disable=invalid-name
-            (2, 3), pz**2 * integrand
+            (3, 4), pz**2 * integrand
         )
         Delta20 = deltaFPoly.integrate(  # pylint: disable=invalid-name
-            (2, 3), energy**2 * integrand
+            (3, 4), energy**2 * integrand
         )
         Delta11 = deltaFPoly.integrate(  # pylint: disable=invalid-name
-            (2, 3), energy * pz * integrand
+            (3, 4), energy * pz * integrand
+        )
+        Delta10 = deltaFPoly.integrate(  # pylint: disable=invalid-name
+            (3, 4), energy * integrand
         )
 
         Deltas = BoltzmannDeltas(  # pylint: disable=invalid-name
-            Delta00=Delta00, Delta02=Delta02, Delta20=Delta20, Delta11=Delta11
+            Delta00=Delta00,
+            Delta02=Delta02,
+            Delta20=Delta20,
+            Delta11=Delta11,
+            Delta10=Delta10,
         )
 
         # returning results
@@ -1162,8 +1198,9 @@ class EWBGBoltzmannSolver:
         Returns
         -------
         delta_f : array_like
-            The deviation from equilibrium, a rank 6 array, with shape
-            :py:data:`(len(z), len(pz), len(pp), len(z), len(pz), len(pp))`.
+            The helicity-resolved deviation from equilibrium, with shape
+            ``(nParticles, nHelicities, M-1, N-1, N-1)``. Helicity values and
+            their array ordering are stored in :attr:`helicities`.
 
         References
         ----------
@@ -1178,18 +1215,23 @@ class EWBGBoltzmannSolver:
         # solving the linear system: operator.deltaF = source
         deltaF = np.linalg.solve(operator, source)
 
-        # returning result
+        # np.linalg.solve treats the helicity index as a set of right-hand
+        # sides. Restore it as an explicit array axis after the momentum axes.
         deltaFShape = (
             len(self.offEqParticles),
             self.grid.M - 1,
             self.grid.N - 1,
             self.grid.N - 1,
+            len(self.helicities),
         )
         deltaF = np.reshape(deltaF, deltaFShape, order="C")
+        deltaF = np.moveaxis(deltaF, -1, 1)
 
         return deltaF
 
-    def estimateTruncationError(self, deltaF: np.ndarray, shapeTruncated: tuple[int, ...]) -> float:
+    def estimateTruncationError(
+        self, deltaF: np.ndarray, shapeTruncated: tuple[int, ...]
+    ) -> float:
         r"""
         Quick estimate of the polynomial truncation error using
         John Boyd's Rule-of-thumb-2: the last coefficient of a Chebyshev
@@ -1199,44 +1241,47 @@ class EWBGBoltzmannSolver:
         Parameters
         ----------
         deltaF : array_like
-            The solution for which to estimate the truncation error,
-            a rank 3 array, with shape :py:data:`(len(z), len(pz), len(pp))`.
+            The helicity-resolved solution with axes
+            ``(particle, helicity, z, pz, pp)``.
 
         Returns
         -------
         truncationError : float
-            Estimate of the relative trucation error.
+            Estimate of the relative truncation error.
         """
         # constructing Polynomial
-        basisTypes = ("Array", self.basisM, self.basisN, self.basisN)
-        basisNames = ("Array", "z", "pz", "pp")
+        basisTypes = ("Array", "Array", self.basisM, self.basisN, self.basisN)
+        basisNames = ("Array", "Array", "z", "pz", "pp")
         deltaFPoly = Polynomial(deltaF, self.grid, basisTypes, basisNames, False)
 
         # sum(|deltaF|) as the norm
-        deltaFPoly.changeBasis(("Array", "Chebyshev", "Chebyshev", "Chebyshev"))
+        deltaFPoly.changeBasis(
+            ("Array", "Array", "Chebyshev", "Chebyshev", "Chebyshev")
+        )
         deltaFTuncated = deltaFPoly.coefficients[
             :shapeTruncated[0],
             :shapeTruncated[1],
             :shapeTruncated[2],
             :shapeTruncated[3],
+            :shapeTruncated[4],
         ]
         deltaFSumAbs = np.sum(
             np.abs(deltaFTuncated),
-            axis=(1, 2, 3),
+            axis=(2, 3, 4),
         )
 
         # estimating truncation errors in each direction
         truncationErrorChi = np.sum(
-            np.abs(deltaFTuncated[:, -1, :, :]),
-            axis=(1, 2),
+            np.abs(deltaFTuncated[:, :, -1, :, :]),
+            axis=(2, 3),
         ) / deltaFSumAbs
         truncationErrorPz = np.sum(
-            np.abs(deltaFTuncated[:, :, -1, :]),
-            axis=(1, 2),
+            np.abs(deltaFTuncated[:, :, :, -1, :]),
+            axis=(2, 3),
         ) / deltaFSumAbs
         truncationErrorPp = np.sum(
-            np.abs(deltaFTuncated[:, :, :, -1]),
-            axis=(1, 2),
+            np.abs(deltaFTuncated[:, :, :, :, -1]),
+            axis=(2, 3),
         ) / deltaFSumAbs
 
         # estimating the total truncation error as the maximum of these three
@@ -1246,7 +1291,9 @@ class EWBGBoltzmannSolver:
             np.max(truncationErrorPp),
         )
 
-    def checkSpectralConvergence(self, deltaF: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int, int], tuple[int, int, int]]:
+    def checkSpectralConvergence(
+        self, deltaF: np.ndarray
+    ) -> tuple[np.ndarray, tuple[int, int, int, int, int], tuple[int, int, int]]:
         """
         Check for spectral convergence.
 
@@ -1257,39 +1304,42 @@ class EWBGBoltzmannSolver:
         Parameters
         ----------
         deltaF : array_like
-            The solution for which to estimate the truncation error,
-            a rank 3 array, with shape :py:data:`(len(z), len(pz), len(pp))`.
+            The helicity-resolved solution with axes
+            ``(particle, helicity, z, pz, pp)``.
 
         Returns
         -------
         deltaFTruncated : np.ndarray
-            Potentially truncated version of input :py:data:`deltaF`, padded with zeros if truncated, so same shape as input.
-        shapeTruncated : tuple[int, int, int, int]
+            Potentially truncated version of ``deltaF``, padded with zeros if
+            truncated and therefore retaining the input shape.
+        shapeTruncated : tuple[int, int, int, int, int]
             Shape of truncated array.
         spectralPeaks : tuple[int, int, int]
             Indices of the peaks in the (potentially truncated) spectral expansion.
         """
         # constructing Polynomial
-        basisTypes = ("Array", self.basisM, self.basisN, self.basisN)
-        basisNames = ("Array", "z", "pz", "pp")
+        basisTypes = ("Array", "Array", self.basisM, self.basisN, self.basisN)
+        basisNames = ("Array", "Array", "z", "pz", "pp")
         deltaFPoly = Polynomial(deltaF, self.grid, basisTypes, basisNames, False)
         truncatedShape = list(deltaF.shape)
 
         # changing to Chebyshev basis
-        deltaFPoly.changeBasis(("Array", "Chebyshev", "Chebyshev", "Chebyshev"))
+        deltaFPoly.changeBasis(
+            ("Array", "Array", "Chebyshev", "Chebyshev", "Chebyshev")
+        )
 
         # looking at convergence of spectral expansion
         spectralCoeffsChi = np.sum(
             np.abs(deltaFPoly.coefficients),
-            axis=(0, 2, 3),
+            axis=(0, 1, 3, 4),
         )
         spectralCoeffsPz = np.sum(
             np.abs(deltaFPoly.coefficients),
-            axis=(0, 1, 3),
+            axis=(0, 1, 2, 4),
         )
         spectralCoeffsPp = np.sum(
             np.abs(deltaFPoly.coefficients),
-            axis=(0, 1, 2),
+            axis=(0, 1, 2, 3),
         )
 
         # how much to cut, if truncating
@@ -1327,23 +1377,23 @@ class EWBGBoltzmannSolver:
         if self.truncationOption == ETruncationOption.AUTO:
             # if the slope is not definitely negative, we will truncate
             if not chiConvergenceTailInfo.apparentConvergence:
-                deltaFPoly.coefficients[:, cutSpatial:, :, :] = 0
-                truncatedShape[1] = deltaF.shape[1] + cutSpatial
+                deltaFPoly.coefficients[:, :, cutSpatial:, :, :] = 0
+                truncatedShape[2] = deltaF.shape[2] + cutSpatial
             if not pzConvergenceTailInfo.apparentConvergence:
-                deltaFPoly.coefficients[:, :, cutMomentum:, :] = 0
-                truncatedShape[2] = deltaF.shape[2] + cutMomentum
-            if not ppConvergenceTailInfo.apparentConvergence:
-                deltaFPoly.coefficients[:, :, :, cutMomentum:] = 0
+                deltaFPoly.coefficients[:, :, :, cutMomentum:, :] = 0
                 truncatedShape[3] = deltaF.shape[3] + cutMomentum
+            if not ppConvergenceTailInfo.apparentConvergence:
+                deltaFPoly.coefficients[:, :, :, :, cutMomentum:] = 0
+                truncatedShape[4] = deltaF.shape[4] + cutMomentum
         elif self.truncationOption == ETruncationOption.THIRD:
             # truncating regardless
-            deltaFPoly.coefficients[:, cutSpatial:, :, :] = 0
-            deltaFPoly.coefficients[:, :, cutMomentum:, :] = 0
-            deltaFPoly.coefficients[:, :, :, cutMomentum:] = 0
-            truncatedShape[1:] = [
-                deltaF.shape[1] + cutSpatial,
-                deltaF.shape[2] + cutMomentum,
+            deltaFPoly.coefficients[:, :, cutSpatial:, :, :] = 0
+            deltaFPoly.coefficients[:, :, :, cutMomentum:, :] = 0
+            deltaFPoly.coefficients[:, :, :, :, cutMomentum:] = 0
+            truncatedShape[2:] = [
+                deltaF.shape[2] + cutSpatial,
                 deltaF.shape[3] + cutMomentum,
+                deltaF.shape[4] + cutMomentum,
             ]
             if allTailsConverging:
                 logging.info(
@@ -1358,17 +1408,17 @@ class EWBGBoltzmannSolver:
 
         # checking spectral convergence of z direction
         chiConvergenceInfo = SpectralConvergenceInfo(
-            spectralCoeffsChi[:truncatedShape[1]], weightPower=0
+            spectralCoeffsChi[:truncatedShape[2]], weightPower=0
         )
 
         # checking spectral convergence of pz direction
         pzConvergenceInfo = SpectralConvergenceInfo(
-            spectralCoeffsPz[:truncatedShape[2]], weightPower=1
+            spectralCoeffsPz[:truncatedShape[3]], weightPower=1
         )
 
         # checking spectral convergence of pp direction
         ppConvergenceInfo = SpectralConvergenceInfo(
-            spectralCoeffsPp[:truncatedShape[3]], weightPower=2
+            spectralCoeffsPp[:truncatedShape[4]], weightPower=2
         )
 
         # putting together the spectral peaks
@@ -1424,41 +1474,52 @@ class EWBGBoltzmannSolver:
         deltaFPoly = Polynomial(
             deltaF,
             self.grid,
-            ("Array", self.basisM, self.basisN, self.basisN),
-            ("z", "z", "pz", "pp"),
+            ("Array", "Array", self.basisM, self.basisN, self.basisN),
+            ("Array", "Array", "z", "pz", "pp"),
             False,
         )
-        deltaFPoly.changeBasis(("Array", "Cardinal", "Cardinal", "Cardinal"))
+        deltaFPoly.changeBasis(
+            ("Array", "Array", "Cardinal", "Cardinal", "Cardinal")
+        )
 
         # Computing \delta f^2
         deltaFSqPoly = deltaFPoly * deltaFPoly
-        deltaFSqPoly.changeBasis(("Array", self.basisM, self.basisN, self.basisN))
+        deltaFSqPoly.changeBasis(
+            ("Array", "Array", self.basisM, self.basisN, self.basisN)
+        )
 
         operator, _, _, collision = self.buildLinearEquations()
-        source = np.sum(
-            collision * deltaFSqPoly.coefficients[None, None, None, None, ...],
-            axis=(4, 5, 6, 7),
+        source = np.einsum(
+            "aijkblmn,bhlmn->ahijk",
+            collision,
+            deltaFSqPoly.coefficients,
+            optimize=True,
         )
 
         # Computing the correction from nonlinear terms
-        deltaNonlin = np.linalg.solve(
-            operator, np.reshape(source, source.size, order="C")
-        )
+        totalSize = operator.shape[0]
+        source = np.moveaxis(source, 1, -1)
+        source = np.reshape(source, (totalSize, len(self.helicities)), order="C")
+        deltaNonlin = np.linalg.solve(operator, source)
         deltaNonlinShape = (
             len(self.offEqParticles),
             self.grid.M - 1,
             self.grid.N - 1,
             self.grid.N - 1,
+            len(self.helicities),
         )
         deltaNonlin = np.reshape(deltaNonlin, deltaNonlinShape, order="C")
+        deltaNonlin = np.moveaxis(deltaNonlin, -1, 1)
         deltaNonlinPoly = Polynomial(
             coefficients=deltaNonlin,
             grid=self.grid,
-            basis=("Array", self.basisM, self.basisN, self.basisN),
-            direction=("z", "z", "pz", "pp"),
+            basis=("Array", "Array", self.basisM, self.basisN, self.basisN),
+            direction=("Array", "Array", "z", "pz", "pp"),
             endpoints=False,
         )
-        deltaNonlinPoly.changeBasis(("Array", "Cardinal", "Cardinal", "Cardinal"))
+        deltaNonlinPoly.changeBasis(
+            ("Array", "Array", "Cardinal", "Cardinal", "Cardinal")
+        )
 
         msqFull = np.array(
             [
@@ -1524,13 +1585,22 @@ class EWBGBoltzmannSolver:
             :, None, None, None
         ]
         integrand = dofs * dmsqdChi * dpzdrz * dppdrp * pp / (4 * np.pi**2 * energy)
+        # ``totalDOFs`` includes both helicities. Each explicit helicity
+        # distribution therefore carries half of that multiplicity.
+        integrandPerHelicity = integrand[:, None, ...] / 2
 
         # Computing the pressure contributions of the equilibrium part, the linear
         # out-of-equilibrium part and the first-order correction due to nonlinearities.
         pressureEq = np.sum(fEqPoly.integrate((1, 2, 3), integrand).coefficients)
-        pressureDeltaF = np.sum(deltaFPoly.integrate((1, 2, 3), integrand).coefficients)
+        pressureDeltaF = np.sum(
+            deltaFPoly.integrate(
+                (2, 3, 4), integrandPerHelicity
+            ).coefficients
+        )
         pressureNonlin = np.sum(
-            deltaNonlinPoly.integrate((1, 2, 3), integrand).coefficients
+            deltaNonlinPoly.integrate(
+                (2, 3, 4), integrandPerHelicity
+            ).coefficients
         )
 
         # Computing the 2 linearisation criteria
@@ -1693,13 +1763,17 @@ class EWBGBoltzmannSolver:
 
         ##### source term for CP-violating part of the Boltzmann equation #####
 
-        helicity = 1 # for the - helicity state what can we do?
         gammaParallel = energy / energyZ
-        sp = gammaParallel * pz / np.sqrt(pz**2 + pp**2) 
+        sp = gammaParallel * pz / np.sqrt(pz**2 + pp**2)
 
-        forceOdd = 0.5 * helicity * sp * (dThetadChi * dMsqdChi * dchidxi **2 + ddThetadChi2 * msq * dchidxi ** 2 - msq * dchidxi ** 3 * d2xidchi2xx * dThetadChi) / energyZ
-        deltaEnergy = 0.5 * helicity * sp * dThetadChi * msq * dchidxi / energyZ / energy
-        ddeltaEnergydxi = 0.5 * helicity * sp * (dThetadChi * dMsqdChi * dchidxi **2 + ddThetadChi2 * msq * dchidxi ** 2 - msq * dchidxi ** 3 * d2xidchi2xx * dThetadChi) / energyZ / energy
+        cpGradient = (
+            dThetadChi * dMsqdChi * dchidxi**2
+            + ddThetadChi2 * msq * dchidxi**2
+            - msq * dchidxi**3 * d2xidchi2xx * dThetadChi
+        )
+        forceOdd = 0.5 * sp * cpGradient / energyZ
+        deltaEnergy = 0.5 * sp * dThetadChi * msq * dchidxi / energyZ / energy
+        ddeltaEnergydxi = 0.5 * sp * cpGradient / energyZ / energy
 
         source = - dfEq * gammaPlasma * v / temperature * forceOdd
         source = source - momentumWall * d2feq *  (- (momentumPlasma * gammaPlasma**2 * dvdChi + energyPlasma * dTemperaturedChi / temperature) / temperature) * dchidxi * gammaPlasma / temperature * deltaEnergy
@@ -1707,6 +1781,10 @@ class EWBGBoltzmannSolver:
         source = source - momentumWall * dfEq * gammaPlasma / temperature * ddeltaEnergydxi
         source = source + 1 / 2 * dMsqdChi * dchidxi * d2feq * (-gammaPlasma ** 2 * v / temperature ** 2) * deltaEnergy
 
+        # The CP-odd semiclassical source is odd in helicity. The transport
+        # operator below is helicity diagonal and identical for h=-1 and h=+1,
+        # so helicity can be retained as a multiple-right-hand-side index.
+        source = source[:, None, ...] * self.helicities[None, :, None, None, None]
 
         ##### liouville operator #####
         # Given in the LHS of Eq. (5) in 2204.13120, with further details given
@@ -1763,7 +1841,8 @@ class EWBGBoltzmannSolver:
         totalSize = (
             len(particles) * (self.grid.M - 1) * (self.grid.N - 1) * (self.grid.N - 1)
         )
-        source = np.reshape(source, totalSize, order="C")
+        source = np.moveaxis(source, 1, -1)
+        source = np.reshape(source, (totalSize, len(self.helicities)), order="C")
         operator = np.reshape(operator, (totalSize, totalSize), order="C")
 
         # returning results

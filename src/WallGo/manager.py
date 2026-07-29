@@ -6,6 +6,7 @@ wall velocity calculation.
 from dataclasses import dataclass
 import pathlib
 import logging
+import typing
 import numpy as np
 
 # WallGo imports
@@ -19,7 +20,7 @@ from .grid3Scales import Grid3Scales
 from .hydrodynamics import Hydrodynamics
 from .hydrodynamicsTemplateModel import HydrodynamicsTemplateModel
 from .thermodynamics import Thermodynamics
-from .results import WallGoResults
+from .results import BoltzmannResults, WallGoResults
 from .config import Config
 
 
@@ -847,7 +848,7 @@ class EWBGWallGoManager(WallGoManager):
     def solveBoltzmannEWBG(
         self,
         ewbgSolver: EWBGSolver,
-    ) -> WallGoResults:
+    ) -> np.ndarray:
         r"""
         Solves the EWBG Boltzmann equation for the source terms.
 
@@ -859,15 +860,16 @@ class EWBGWallGoManager(WallGoManager):
 
         Returns
         -------
-        WallGoResults
-            Object containing the baryogenesis source terms and other relevant
-            quantities.
+        np.ndarray
+            Helicity-resolved distribution with axes
+            ``(particle, helicity, z, pz, pp)``.
         """
-        # return deltaF
-    
         return ewbgSolver.EWBGBoltzmannSolver.solveBoltzmannEquations()
 
-    def getDeltas(self, ewbgSolver: EWBGSolver):
-        """Returns the Deltas computed by the EWBG Boltzmann solver. 
-        """
-        return ewbgSolver.EWBGBoltzmannSolver.getDeltas()
+    def getDeltas(
+        self,
+        ewbgSolver: EWBGSolver,
+        deltaF: typing.Optional[np.ndarray] = None,
+    ) -> BoltzmannResults:
+        """Return moments computed by the EWBG Boltzmann solver."""
+        return ewbgSolver.EWBGBoltzmannSolver.getDeltas(deltaF)

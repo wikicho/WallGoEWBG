@@ -563,18 +563,26 @@ def main():
 
     # EWBG input
     ewbgSolver = manager.setupEWBGSolver(solver, results)
-    manager.solveBoltzmannEWBG(ewbgSolver)
-    boltzmannResults = manager.getDeltas(ewbgSolver)
+    deltaF = manager.solveBoltzmannEWBG(ewbgSolver)
+    boltzmannResults = manager.getDeltas(ewbgSolver, deltaF)
 
     z = ewbgSolver.grid.xiValues
-    y = boltzmannResults.Deltas.Delta00.coefficients[0]
+    delta10 = boltzmannResults.Deltas.Delta10
+    assert delta10 is not None
 
     import matplotlib.pyplot as plt
 
-    plt.plot(z, y)
+    for helicity in ewbgSolver.EWBGBoltzmannSolver.helicities:
+        helicityIndex = ewbgSolver.EWBGBoltzmannSolver.getHelicityIndex(helicity)
+        plt.plot(
+            z,
+            delta10.coefficients[0, helicityIndex],
+            label=rf"$h={helicity:+d}$",
+        )
     plt.xlabel(r"$z$")
-    plt.ylabel(r"$\Delta_{00}$")
-    plt.title("Top quark Delta00")
+    plt.ylabel(r"$\Delta_{10,h}$")
+    plt.title("Top-quark helicity density moments")
+    plt.legend()
     plt.show()
 
 if __name__ == "__main__":
