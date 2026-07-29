@@ -165,35 +165,63 @@ def test_ewbg_solution_keeps_helicity_index(
             ] = 1
     boltzmann.setCollisionArray(collisionArray)
 
-    operator, source, _, _ = boltzmann.buildLinearEquations()
+    operator, sourceOdd, _, _ = boltzmann.buildLinearEquations(
+        WallGo.EWBGSourceType.ODD
+    )
+    _, sourceEven, _, _ = boltzmann.buildLinearEquations(
+        WallGo.EWBGSourceType.EVEN
+    )
+    _, sourceTotal, _, _ = boltzmann.buildLinearEquations(
+        WallGo.EWBGSourceType.TOTAL
+    )
+    _, sourceDefault, _, _ = boltzmann.buildLinearEquations()
+
+    wallBoltzmann = WallGo.BoltzmannSolver(
+        grid,
+        basisM="Cardinal",
+        basisN="Cardinal",
+    )
+    wallBoltzmann.updateParticleList([particle])
+    wallBoltzmann.background = boltzmann.background
+    wallBoltzmann.setCollisionArray(collisionArray)
+    _, wallSource, _, _ = wallBoltzmann.buildLinearEquations()
 
     assert tuple(boltzmann.helicities) == (-1, 1)
-    assert source.shape == (operator.shape[0], 2)
-    assert np.linalg.norm(source[:, 0]) > 0
-    np.testing.assert_allclose(source[:, 0], -source[:, 1])
+    assert sourceOdd.shape == (operator.shape[0], 2)
+    assert np.linalg.norm(sourceOdd[:, 0]) > 0
+    assert np.linalg.norm(sourceEven[:, 0]) > 0
+    np.testing.assert_allclose(sourceOdd[:, 0], -sourceOdd[:, 1])
+    np.testing.assert_allclose(sourceEven[:, 0], sourceEven[:, 1])
+    np.testing.assert_allclose(sourceEven[:, 0], wallSource)
+    np.testing.assert_allclose(sourceTotal, sourceEven + sourceOdd)
+    np.testing.assert_allclose(sourceDefault, sourceOdd)
 
-    deltaF = boltzmann.solveBoltzmannEquations()
-    assert deltaF.shape == (
+    deltaFOdd = boltzmann.solveBoltzmannEquations(WallGo.EWBGSourceType.ODD)
+    deltaFEven = boltzmann.solveBoltzmannEquations(WallGo.EWBGSourceType.EVEN)
+    deltaFTotal = boltzmann.solveBoltzmannEquations(WallGo.EWBGSourceType.TOTAL)
+    assert deltaFOdd.shape == (
         1,
         2,
         spatialGridSize - 1,
         momentumGridSize - 1,
         momentumGridSize - 1,
     )
-    np.testing.assert_allclose(deltaF[:, 0], -deltaF[:, 1])
+    np.testing.assert_allclose(deltaFOdd[:, 0], -deltaFOdd[:, 1])
+    np.testing.assert_allclose(deltaFEven[:, 0], deltaFEven[:, 1])
+    np.testing.assert_allclose(deltaFTotal, deltaFEven + deltaFOdd)
 
     for helicity in boltzmann.helicities:
         helicityIndex = boltzmann.getHelicityIndex(helicity)
         residual = (
-            operator @ deltaF[:, helicityIndex].reshape(-1)
-            - source[:, helicityIndex]
+            operator @ deltaFOdd[:, helicityIndex].reshape(-1)
+            - sourceOdd[:, helicityIndex]
         )
         relativeResidual = np.linalg.norm(residual) / np.linalg.norm(
-            source[:, helicityIndex]
+            sourceOdd[:, helicityIndex]
         )
         assert relativeResidual < 1e-13
 
-    results = boltzmann.getDeltas(deltaF)
+    results = boltzmann.getDeltas(deltaFOdd)
     assert results.Deltas.Delta10 is not None
     assert results.Deltas.Delta10.coefficients.shape == (
         1,
@@ -204,7 +232,9 @@ def test_ewbg_solution_keeps_helicity_index(
         results.Deltas.Delta10.coefficients[:, 0],
         -results.Deltas.Delta10.coefficients[:, 1],
     )
-    assert np.all(np.isfinite(boltzmann.checkLinearization(deltaF)))
+    assert np.all(np.isfinite(boltzmann.checkLinearization(deltaFOdd)))
+    with pytest.raises(TypeError, match="sourceType"):
+        boltzmann.buildLinearEquations("odd")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("helicities", [(), (-1, -1), (0, 1)])

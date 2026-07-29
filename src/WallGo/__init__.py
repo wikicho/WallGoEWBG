@@ -6,7 +6,12 @@ import importlib
 from importlib.metadata import version, PackageNotFoundError
 
 # package level modules
-from .boltzmann import BoltzmannSolver, EWBGBoltzmannSolver, ETruncationOption
+from .boltzmann import (
+    BoltzmannSolver,
+    EWBGBoltzmannSolver,
+    ETruncationOption,
+    EWBGSourceType,
+)
 from .config import Config
 from .collisionArray import CollisionArray
 from .containers import PhaseInfo, BoltzmannBackground, BoltzmannDeltas, FreeEnergyArrays, WallParams

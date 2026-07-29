@@ -563,7 +563,10 @@ def main():
 
     # EWBG input
     ewbgSolver = manager.setupEWBGSolver(solver, results)
-    deltaF = manager.solveBoltzmannEWBG(ewbgSolver)
+    deltaF = manager.solveBoltzmannEWBG(
+        ewbgSolver,
+        sourceType=WallGo.EWBGSourceType.ODD,
+    )
     boltzmannResults = manager.getDeltas(ewbgSolver, deltaF)
 
     z = ewbgSolver.grid.xiValues

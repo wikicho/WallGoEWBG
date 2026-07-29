@@ -11,7 +11,12 @@ import numpy as np
 
 # WallGo imports
 import WallGo
-from .boltzmann import BoltzmannSolver, EWBGBoltzmannSolver, ETruncationOption
+from .boltzmann import (
+    BoltzmannSolver,
+    EWBGBoltzmannSolver,
+    ETruncationOption,
+    EWBGSourceType,
+)
 from .containers import PhaseInfo
 from .equationOfMotion import EOM
 from .exceptions import WallGoError, WallGoPhaseValidationError
@@ -848,6 +853,7 @@ class EWBGWallGoManager(WallGoManager):
     def solveBoltzmannEWBG(
         self,
         ewbgSolver: EWBGSolver,
+        sourceType: EWBGSourceType = EWBGSourceType.ODD,
     ) -> np.ndarray:
         r"""
         Solves the EWBG Boltzmann equation for the source terms.
@@ -857,6 +863,9 @@ class EWBGWallGoManager(WallGoManager):
         ewbgSolver : EWBGSolver
             Data class bundling the EOM, grid, BoltzmannSolver and a
             EWBGBoltzmannSolver loaded with the converged background.
+        sourceType : EWBGSourceType, optional
+            Select the CP-even, CP-odd, or total source. The default is
+            ``EWBGSourceType.ODD``.
 
         Returns
         -------
@@ -864,7 +873,7 @@ class EWBGWallGoManager(WallGoManager):
             Helicity-resolved distribution with axes
             ``(particle, helicity, z, pz, pp)``.
         """
-        return ewbgSolver.EWBGBoltzmannSolver.solveBoltzmannEquations()
+        return ewbgSolver.EWBGBoltzmannSolver.solveBoltzmannEquations(sourceType)
 
     def getDeltas(
         self,

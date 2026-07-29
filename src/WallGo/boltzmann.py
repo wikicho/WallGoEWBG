@@ -35,6 +35,19 @@ class ETruncationOption(Enum):
     """Drop the last third of the coefficients."""
 
 
+class EWBGSourceType(Enum):
+    """Source component used by :class:`EWBGBoltzmannSolver`."""
+
+    EVEN = auto()
+    """CP-even source from mass, temperature, and fluid-velocity gradients."""
+
+    ODD = auto()
+    """CP-odd, helicity-odd semiclassical source."""
+
+    TOTAL = auto()
+    """Sum of the CP-even and CP-odd source terms."""
+
+
 class BoltzmannSolver:
     """
     Class for solving Boltzmann equations for small deviations from equilibrium.
@@ -1169,7 +1182,10 @@ class EWBGBoltzmannSolver:
             spectralPeaks=spectralPeaks,
         )
 
-    def solveBoltzmannEquations(self) -> np.ndarray:
+    def solveBoltzmannEquations(
+        self,
+        sourceType: EWBGSourceType = EWBGSourceType.ODD,
+    ) -> np.ndarray:
         r"""
         Solves Boltzmann equation for :math:`\delta f`, equation (32) of [LC22].
 
@@ -1194,6 +1210,10 @@ class EWBGBoltzmannSolver:
 
         Parameters
         ----------
+        sourceType : EWBGSourceType, optional
+            Select ``EVEN``, ``ODD``, or their ``TOTAL``. The default is
+            ``ODD`` so that the returned distribution remains the
+            baryogenesis-relevant CP-odd perturbation.
 
         Returns
         -------
@@ -1210,7 +1230,7 @@ class EWBGBoltzmannSolver:
         """
 
         # contructing the various terms in the Boltzmann equation
-        operator, source, _, _ = self.buildLinearEquations()
+        operator, source, _, _ = self.buildLinearEquations(sourceType)
 
         # solving the linear system: operator.deltaF = source
         deltaF = np.linalg.solve(operator, source)
@@ -1611,12 +1631,21 @@ class EWBGBoltzmannSolver:
 
     def buildLinearEquations(
         self,
+        sourceType: EWBGSourceType = EWBGSourceType.ODD,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Constructs matrix and source for Boltzmann equation.
+        Construct the matrix and selected source for the Boltzmann equation.
 
         Note, we make extensive use of numpy's broadcasting rules.
+
+        Parameters
+        ----------
+        sourceType : EWBGSourceType, optional
+            Select the CP-even, CP-odd, or total source. The default is the
+            CP-odd source used for baryogenesis.
         """
+        if not isinstance(sourceType, EWBGSourceType):
+            raise TypeError("sourceType must be an EWBGSourceType.")
 
         particles = self.offEqParticles
 
@@ -1761,7 +1790,22 @@ class EWBGBoltzmannSolver:
         dfEq = EWBGBoltzmannSolver._dfeq(energyPlasma / temperature, statistics)
         d2feq = EWBGBoltzmannSolver._d2feq(energyPlasma / temperature, statistics)
 
-        ##### source term for CP-violating part of the Boltzmann equation #####
+        ##### CP-even source term #####
+        # This is -(P_w d_xi + F_even d_p) f_eq. It is the same source used
+        # by BoltzmannSolver for wall friction and is independent of helicity
+        # at the order retained here.
+        sourceEven = (
+            (dfEq / temperature)
+            * dchidxi
+            * (
+                momentumWall * momentumPlasma * gammaPlasma**2 * dvdChi
+                + momentumWall * energyPlasma * dTemperaturedChi / temperature
+                + 0.5 * dMsqdChi * uwBaruPl
+            )
+        )
+        sourceEven = np.repeat(sourceEven[:, None, ...], len(self.helicities), axis=1)
+
+        ##### CP-odd source term #####
 
         gammaParallel = energy / energyZ
         sp = gammaParallel * pz / np.sqrt(pz**2 + pp**2)
@@ -1775,16 +1819,52 @@ class EWBGBoltzmannSolver:
         deltaEnergy = 0.5 * sp * dThetadChi * msq * dchidxi / energyZ / energy
         ddeltaEnergydxi = 0.5 * sp * cpGradient / energyZ / energy
 
-        source = - dfEq * gammaPlasma * v / temperature * forceOdd
-        source = source - momentumWall * d2feq *  (- (momentumPlasma * gammaPlasma**2 * dvdChi + energyPlasma * dTemperaturedChi / temperature) / temperature) * dchidxi * gammaPlasma / temperature * deltaEnergy
-        source = source - momentumWall * dfEq * (gammaPlasma**3 * v * dvdChi * dchidxi / temperature - gammaPlasma * dTemperaturedChi * dchidxi / temperature**2) * deltaEnergy
-        source = source - momentumWall * dfEq * gammaPlasma / temperature * ddeltaEnergydxi
-        source = source + 1 / 2 * dMsqdChi * dchidxi * d2feq * (-gammaPlasma ** 2 * v / temperature ** 2) * deltaEnergy
+        sourceOdd = -dfEq * gammaPlasma * v / temperature * forceOdd
+        sourceOdd = sourceOdd - momentumWall * d2feq * (
+            -(
+                momentumPlasma * gammaPlasma**2 * dvdChi
+                + energyPlasma * dTemperaturedChi / temperature
+            )
+            / temperature
+        ) * dchidxi * gammaPlasma / temperature * deltaEnergy
+        sourceOdd = sourceOdd - momentumWall * dfEq * (
+            gammaPlasma**3 * v * dvdChi * dchidxi / temperature
+            - gammaPlasma * dTemperaturedChi * dchidxi / temperature**2
+        ) * deltaEnergy
+        sourceOdd = (
+            sourceOdd
+            - momentumWall
+            * dfEq
+            * gammaPlasma
+            / temperature
+            * ddeltaEnergydxi
+        )
+        sourceOdd = (
+            sourceOdd
+            - 0.5
+            * dMsqdChi
+            * dchidxi
+            * d2feq
+            * gammaPlasma**2
+            * v
+            / temperature**2
+            * deltaEnergy
+        )
 
         # The CP-odd semiclassical source is odd in helicity. The transport
         # operator below is helicity diagonal and identical for h=-1 and h=+1,
         # so helicity can be retained as a multiple-right-hand-side index.
-        source = source[:, None, ...] * self.helicities[None, :, None, None, None]
+        sourceOdd = (
+            sourceOdd[:, None, ...]
+            * self.helicities[None, :, None, None, None]
+        )
+
+        if sourceType == EWBGSourceType.EVEN:
+            source = sourceEven
+        elif sourceType == EWBGSourceType.ODD:
+            source = sourceOdd
+        else:
+            source = sourceEven + sourceOdd
 
         ##### liouville operator #####
         # Given in the LHS of Eq. (5) in 2204.13120, with further details given
