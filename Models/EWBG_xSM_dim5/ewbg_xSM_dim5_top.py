@@ -359,7 +359,7 @@ class SingletSMZ2_EWBG(WallGoExampleBase):
     def configureManager(self, inOutManager: "WallGo.WallGoManager") -> None:
         """We load the configs from a file for this example."""
         inOutManager.config.loadConfigFromFile(
-            pathlib.Path(self.exampleBaseDirectory / "singletStandardModelZ2Config.ini")
+            pathlib.Path(self.exampleBaseDirectory / "ewbg_xSM_dim5_top_Config.ini")
         )
         super().configureManager(inOutManager)
 
