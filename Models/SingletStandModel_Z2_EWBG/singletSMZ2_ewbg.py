@@ -1,9 +1,9 @@
-"""
+r"""
 This Python script, singletStandardModelZ2.py,
 implements a minimal Standard Model extension via
 a scalar singlet and incorporating a Z2 symmetry.
-Only the top quark is out of equilibrium, and only
-QCD-interactions are considered in the collisions.
+TopL, TopR, BotL, and Higgs are out of equilibrium. The singlet and gauge
+bosons remain in the equilibrium bath.
 
 Introducing the dimension-5 operator which gives cp violation in the top quark sector
 
@@ -44,7 +44,7 @@ import numpy as np
 # WallGo imports
 import WallGo  # Whole package, in particular we get WallGo._initializeInternal()
 from WallGo import Fields, GenericModel, Particle
-from WallGo.particle import ComplexMassParticle
+from WallGo.particle import ChiralParticle
 from WallGo.interpolatableFunction import EExtrapolationType
 
 from WallGo.PotentialTools import EffectivePotentialNoResum, EImaginaryOption
@@ -57,7 +57,10 @@ sys.path.append(str(modelsBaseDir))
 from wallGoExampleBase import WallGoExampleBase  # pylint: disable=C0411, C0413, E0401
 from wallGoExampleBase import ExampleInputPoint  # pylint: disable=C0411, C0413, E0401
 
-from SingletStandardModel_Z2.singletStandardModelZ2 import SingletSMZ2, EffectivePotentialxSMZ2
+from SingletStandardModel_Z2.singletStandardModelZ2 import (
+    EffectivePotentialxSMZ2,
+    SingletSMZ2,
+)
 
 if TYPE_CHECKING:
     import WallGoCollision
@@ -79,6 +82,12 @@ class SingletSM_CPVdim5(SingletSMZ2):
 
     def defineParticles(self, includeGluon):
         self.clearParticles()
+
+        if includeGluon:
+            raise ValueError(
+                "This EWBG setup keeps gluons in equilibrium; "
+                "includeGluon must be False."
+            )
 
         def topMsqVacuum(fields):
             h = fields.getField(0)
@@ -111,38 +120,77 @@ class SingletSM_CPVdim5(SingletSMZ2):
 
             return np.arctan2(s, Lam)
 
-        topQuark = ComplexMassParticle(
-            "top",
+        topQuarkL = ChiralParticle(
+            "TopL",
             index=0,
             msqVacuum=topMsqVacuum,
             msqDerivative=topMsqDerivative,
             phase=topMCPPhase,
-            statistics="Fermion",
-            totalDOFs=12,
+            chirality=-1,
+            totalDOFs=6,
         )
 
-        self.addParticle(topQuark)
+        topQuarkR = ChiralParticle(
+            "TopR",
+            index=1,
+            msqVacuum=topMsqVacuum,
+            msqDerivative=topMsqDerivative,
+            phase=topMCPPhase,
+            chirality=1,
+            totalDOFs=6,
+        )
 
-        if includeGluon:
+        def masslessMsqVacuum(fields):
+            return np.zeros_like(fields.getField(0))
 
-            # === SU(3) gluon ===
-            # The msqVacuum function must take a Fields object and return an
-            # array of length equal to the number of points in fields.
-            def gluonMsqVacuum(fields: Fields) -> Fields:
-                return np.zeros_like(fields.getField(0))
+        def masslessMsqDerivative(fields):
+            return np.zeros_like(fields)
 
-            def gluonMsqDerivative(fields: Fields) -> Fields:
-                return np.zeros_like(fields)
+        def zeroPhase(fields):
+            return np.zeros_like(fields.getField(0))
 
-            gluon = Particle(
-                "gluon",
-                index=1,
-                msqVacuum=gluonMsqVacuum,
-                msqDerivative=gluonMsqDerivative,
-                statistics="Boson",
-                totalDOFs=16,
+        bottomQuarkL = ChiralParticle(
+            "BotL",
+            index=2,
+            msqVacuum=masslessMsqVacuum,
+            msqDerivative=masslessMsqDerivative,
+            phase=zeroPhase,
+            chirality=-1,
+            totalDOFs=6,
+        )
+
+        def higgsMsqVacuum(fields):
+            h = fields.getField(0)
+            s = fields.getField(1)
+            return (
+                self.modelParameters["muHsq"]
+                + 3 * self.modelParameters["lHH"] * h**2
+                + 0.5 * self.modelParameters["lHS"] * s**2
             )
-            self.addParticle(gluon)
+
+        def higgsMsqDerivative(fields):
+            h = fields.getField(0)
+            s = fields.getField(1)
+            return np.transpose(
+                [
+                    6 * self.modelParameters["lHH"] * h,
+                    self.modelParameters["lHS"] * s,
+                ]
+            )
+
+        higgs = Particle(
+            "Higgs",
+            index=3,
+            msqVacuum=higgsMsqVacuum,
+            msqDerivative=higgsMsqDerivative,
+            statistics="Boson",
+            totalDOFs=4,
+        )
+
+        self.addParticle(topQuarkL)
+        self.addParticle(topQuarkR)
+        self.addParticle(bottomQuarkL)
+        self.addParticle(higgs)
 
     def calculateLagrangianParameters(self, inputParameters):
         params = super().calculateLagrangianParameters(inputParameters)
@@ -160,7 +208,7 @@ class EffectivePotentialCPVdim5(EffectivePotentialxSMZ2):
         yt = self.modelParameters["yt"]
         Lam = self.modelParameters["Lambda"]
 
-        mtsq = 0.5 * v**2 * (yt**2 + x**2 / Lam**2)
+        mtsq = 0.5 * v**2 * yt**2 * (1 + x**2 / Lam**2)
 
         massSq = np.stack((mtsq,), axis=-1)
         degreesOfFreedom = np.array([12])
@@ -179,10 +227,11 @@ class SingletSMZ2_EWBG(WallGoExampleBase):
         self.bShouldRecalculateMatrixElements = False
 
         self.matrixElementFile = pathlib.Path(
-            self.exampleBaseDirectory / "MatrixElements/matrixElements.ewbg_minimal.json"
+            self.exampleBaseDirectory
+            / "MatrixElements/matrixElements.ewbg_chiral.json"
         )
         self.matrixElementInput = pathlib.Path(
-            self.exampleBaseDirectory / "MatrixElements/ewbg_minimal.m"
+            self.exampleBaseDirectory / "MatrixElements/model.m"
         )
 
         # ~ Begin WallGoExampleBase interface
@@ -203,10 +252,10 @@ class SingletSMZ2_EWBG(WallGoExampleBase):
         Initialize the model. This should run after cmdline argument parsing
         so safe to use them here.
         """
-        return SingletSMZ2(self.cmdArgs.outOfEquilibriumGluon)
+        return SingletSM_CPVdim5(self.cmdArgs.outOfEquilibriumGluon)
 
     def initCollisionModel(
-        self, wallGoModel: "SingletSMZ2"
+        self, wallGoModel: "SingletSM_CPVdim5"
     ) -> "WallGoCollision.PhysicsModel":
         """Initialize the Collision model and set the seed."""
 
@@ -220,38 +269,43 @@ class SingletSMZ2_EWBG(WallGoExampleBase):
         # This example comes with a very explicit example function on how to setup and
         # configure the collision module. It is located in a separate module
         # (same directory) to avoid bloating this file. Import and use it here.
-        from exampleCollisionDefs import (
-            setupCollisionModel_QCD,
-        )  # pylint: disable = C0415
+        from exampleCollisionDefs import setupCollisionModel_EWBG  # pylint: disable=C0415
 
-        collisionModel = setupCollisionModel_QCD(
-            wallGoModel.modelParameters,
-            wallGoModel.bIsGluonOffEq,
-        )
+        collisionModel = setupCollisionModel_EWBG(wallGoModel.modelParameters)
 
         return collisionModel
 
     def updateCollisionModel(
         self,
-        inWallGoModel: "SingletSMZ2",
+        inWallGoModel: "SingletSM_CPVdim5",
         inOutCollisionModel: "WallGoCollision.PhysicsModel",
     ) -> None:
-        """Propagate changes in WallGo model to the collision model.
-        For this example we just need to update the QCD coupling and
-        fermion/gluon thermal masses.
-        """
+        """Propagate couplings and thermal masses to the collision model."""
         import WallGoCollision  # pylint: disable = C0415
 
         changedParams = WallGoCollision.ModelParameters()
 
-        gs = inWallGoModel.modelParameters["g3"]  # names differ for historical reasons
+        gs = inWallGoModel.modelParameters["g3"]
+        gw = inWallGoModel.modelParameters["g2"]
+        yt = inWallGoModel.modelParameters["yt"]
+        lHH = inWallGoModel.modelParameters["lHH"]
+        lHS = inWallGoModel.modelParameters["lHS"]
+        lSS = inWallGoModel.modelParameters["lSS"]
+
         changedParams.addOrModifyParameter("gs", gs)
+        changedParams.addOrModifyParameter("gw", gw)
+        changedParams.addOrModifyParameter("yt", yt)
+        changedParams.addOrModifyParameter("lHH", lHH)
+        changedParams.addOrModifyParameter("lHS", lHS)
+        changedParams.addOrModifyParameter("lSS", lSS)
+        changedParams.addOrModifyParameter("mq2", gs**2 / 6.0)
+        changedParams.addOrModifyParameter("mg2", 2.0 * gs**2)
+        changedParams.addOrModifyParameter("mW2", 3.0 * gw**2 / 5.0)
         changedParams.addOrModifyParameter(
-            "mq2", gs**2 / 6.0
-        )  # quark thermal mass^2 in units of T
-        changedParams.addOrModifyParameter(
-            "mg2", 2.0 * gs**2
-        )  # gluon thermal mass^2 in units of T
+            "mH2",
+            3.0 * gw**2 / 16.0 + lHH / 2.0 + yt**2 / 4.0 + lHS / 24.0,
+        )
+        changedParams.addOrModifyParameter("mS2", lHS / 6.0 + lSS / 4.0)
 
         inOutCollisionModel.updateParameters(changedParams)
 
@@ -310,7 +364,7 @@ class SingletSMZ2_EWBG(WallGoExampleBase):
         super().configureManager(inOutManager)
 
     def updateModelParameters(
-        self, model: "SingletSMZ2", inputParameters: dict[str, float]
+        self, model: "SingletSM_CPVdim5", inputParameters: dict[str, float]
     ) -> None:
         """Convert SM + singlet inputs to Lagrangian params and update internal
         model parameters. This example is constructed so that the effective
@@ -578,10 +632,12 @@ def main():
 
     transportSolver = ewbgSolver.EWBGBoltzmannSolver
     _, sourceEvenFlat, _, _ = transportSolver.buildLinearEquations(
-        WallGo.EWBGSourceType.EVEN
+        WallGo.EWBGSourceType.EVEN,
+        resolveChargeBranches=True,
     )
     _, sourceOddFlat, _, _ = transportSolver.buildLinearEquations(
-        WallGo.EWBGSourceType.ODD
+        WallGo.EWBGSourceType.ODD,
+        resolveChargeBranches=True,
     )
 
     sourceGridShape = (
@@ -589,7 +645,7 @@ def main():
         ewbgSolver.grid.M - 1,
         ewbgSolver.grid.N - 1,
         ewbgSolver.grid.N - 1,
-        len(transportSolver.helicities),
+        len(transportSolver.etas),
     )
     sourceEven = np.moveaxis(
         np.reshape(sourceEvenFlat, sourceGridShape, order="C"), -1, 1
@@ -598,10 +654,15 @@ def main():
         np.reshape(sourceOddFlat, sourceGridShape, order="C"), -1, 1
     )
 
-    positiveHelicityIndex = transportSolver.getHelicityIndex(1)
+    topLPosition = next(
+        index
+        for index, particle in enumerate(transportSolver.offEqParticles)
+        if particle.name == "TopL"
+    )
+    particleBranchIndex = transportSolver.getEtaIndex(1)
     _, pzIndex, ppIndex = np.unravel_index(
-        np.argmax(np.abs(sourceOdd[0, positiveHelicityIndex])),
-        sourceOdd[0, positiveHelicityIndex].shape,
+        np.argmax(np.abs(sourceOdd[topLPosition, particleBranchIndex])),
+        sourceOdd[topLPosition, particleBranchIndex].shape,
     )
     pzValue = ewbgSolver.grid.pzValues[pzIndex]
     ppValue = ewbgSolver.grid.ppValues[ppIndex]
@@ -609,17 +670,17 @@ def main():
     sourceFigure, sourceAxes = plt.subplots(
         1, 2, figsize=(11, 4), sharex=True
     )
-    for helicity in transportSolver.helicities:
-        helicityIndex = transportSolver.getHelicityIndex(helicity)
+    for state in transportSolver.kineticStates[topLPosition].flat:
+        chargeIndex = transportSolver.getEtaIndex(state.eta)
         sourceAxes[0].plot(
             z,
-            sourceEven[0, helicityIndex, :, pzIndex, ppIndex],
-            label=rf"$h={helicity:+d}$",
+            sourceEven[topLPosition, chargeIndex, :, pzIndex, ppIndex],
+            label=rf"$\eta={state.eta:+d},\ h={state.helicity:+d}$",
         )
         sourceAxes[1].plot(
             z,
-            sourceOdd[0, helicityIndex, :, pzIndex, ppIndex],
-            label=rf"$h={helicity:+d}$",
+            sourceOdd[topLPosition, chargeIndex, :, pzIndex, ppIndex],
+            label=rf"$\eta={state.eta:+d},\ h={state.helicity:+d}$",
         )
 
     sourceAxes[0].set_title("CP-even source")
@@ -632,24 +693,27 @@ def main():
         sourceAxis.grid(alpha=0.3)
         sourceAxis.legend()
     sourceFigure.suptitle(
-        rf"Top-quark sources at $p_z={pzValue:.3g}$, "
+        rf"TopL sources at $p_z={pzValue:.3g}$, "
         rf"$p_\parallel={ppValue:.3g}$"
     )
     sourceFigure.tight_layout()
 
-    deltaFigure, deltaAxis = plt.subplots()
-    for state in transportSolver.kineticStates[0].flat:
-        chargeIndex = transportSolver.getEtaIndex(state.eta)
-        helicityIndex = transportSolver.getHelicityIndex(state.helicity)
-        deltaAxis.plot(
-            z,
-            delta10.coefficients[0, chargeIndex, helicityIndex],
-            label=rf"$\eta={state.eta:+d},\ h={state.helicity:+d}$",
-        )
-    deltaAxis.set_xlabel(r"$z$")
-    deltaAxis.set_ylabel(r"$\Delta_{10,\eta h}$")
-    deltaAxis.set_title("Top-quark charge and helicity density moments")
-    deltaAxis.legend()
+    deltaFigure, deltaAxes = plt.subplots(2, 2, figsize=(11, 7), sharex=True)
+    for particlePosition, deltaAxis in enumerate(deltaAxes.flat):
+        particle = transportSolver.offEqParticles[particlePosition]
+        for state in transportSolver.kineticStates[particlePosition].flat:
+            chargeIndex = transportSolver.getEtaIndex(state.eta)
+            deltaAxis.plot(
+                z,
+                delta10.coefficients[particlePosition, chargeIndex],
+                label=rf"$\eta={state.eta:+d},\ h={state.helicity:+d}$",
+            )
+        deltaAxis.set_xlabel(r"$z$")
+        deltaAxis.set_ylabel(r"$\Delta_{10,\eta}$")
+        deltaAxis.set_title(particle.name)
+        deltaAxis.grid(alpha=0.3)
+        deltaAxis.legend()
+    deltaFigure.suptitle("Charge-resolved density moments")
     deltaFigure.tight_layout()
 
     plt.show()

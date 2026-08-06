@@ -13,7 +13,7 @@ import findiff  # finite difference methods
 from .containers import BoltzmannBackground, BoltzmannDeltas
 from .grid import Grid
 from .polynomial import Polynomial, SpectralConvergenceInfo
-from .particle import Particle, ComplexMassParticle
+from .particle import Particle, ComplexMassParticle, ChiralParticle, KineticState
 from .collisionArray import CollisionArray
 from .results import BoltzmannResults, WallGoResults
 from .exceptions import CollisionLoadError
@@ -912,12 +912,15 @@ class EWBGBoltzmannSolver:
 
     # Member variables
     grid: Grid
-    offEqParticles: list[ComplexMassParticle] # not sure if this is the right type
+    offEqParticles: list[Particle]
     background: BoltzmannBackground
     collisionArray: CollisionArray
     truncationOption: ETruncationOption
     wallGoResults: WallGoResults
     helicities: np.ndarray
+    etas: np.ndarray
+    chargeBranches: np.ndarray
+    kineticStates: np.ndarray
 
     def __init__(
         self,
@@ -991,12 +994,24 @@ class EWBGBoltzmannSolver:
             )
         self.helicities = np.asarray(helicities, dtype=int)
         self.helicities.setflags(write=False)
+        # eta = +1 denotes particles and eta = -1 antiparticles.  The
+        # collision operator is currently CP symmetric and does not carry an
+        # explicit eta axis, so charge-resolved distributions are reconstructed
+        # from their CP-even and CP-odd components after solving.
+        self.etas = np.asarray((1, -1), dtype=int)
+        self.etas.setflags(write=False)
+        self.chargeBranches = self.etas
 
         # These are set, and can be updated, by our member functions
         # TODO: are these None types the best way to go?
         self.background = None  # type: ignore[assignment]
         self.collisionArray = None  # type: ignore[assignment]
         self.offEqParticles = []
+        self.usesChiralSpecies = False
+        self.kineticStates = np.empty(
+            (0, len(self.etas), len(self.helicities)), dtype=object
+        )
+        self.kineticStates.setflags(write=False)
 
     def getHelicityIndex(self, helicity: int) -> int:
         """Return the array index corresponding to helicity ``-1`` or ``1``."""
@@ -1007,6 +1022,53 @@ class EWBGBoltzmannSolver:
                 f"{tuple(self.helicities)}."
             )
         return int(matches[0])
+
+    def getEtaIndex(self, eta: int) -> int:
+        """Return the array index for particle or antiparticle ``eta``."""
+        matches = np.flatnonzero(self.etas == eta)
+        if matches.size == 0:
+            raise ValueError(
+                f"Charge branch {eta} is not physical; available values are "
+                f"{tuple(self.etas)}."
+            )
+        return int(matches[0])
+
+    def getChargeIndex(self, eta: int) -> int:
+        """Alias for :meth:`getEtaIndex`."""
+        return self.getEtaIndex(eta)
+
+    def getKineticState(
+        self,
+        particleIndex: int,
+        eta: int,
+        helicity: int,
+    ) -> KineticState:
+        r"""Return the state labelled by species index, :math:`\eta`, and helicity."""
+        particleMatches = [
+            index
+            for index, particle in enumerate(self.offEqParticles)
+            if particle.index == particleIndex
+        ]
+        if len(particleMatches) != 1:
+            raise ValueError(
+                f"Expected one particle with index {particleIndex}; "
+                f"found {len(particleMatches)}."
+            )
+        particlePosition = particleMatches[0]
+        etaPosition = self.getEtaIndex(eta)
+        if self.usesChiralSpecies:
+            state = self.kineticStates[particlePosition, etaPosition]
+            if state.helicity != helicity:
+                raise ValueError(
+                    f"State {state.particle.name}, eta={eta} has physical helicity "
+                    f"{state.helicity}, not {helicity}."
+                )
+            return state
+        return self.kineticStates[
+            particlePosition,
+            etaPosition,
+            self.getHelicityIndex(helicity),
+        ]
 
     # this should be verified since we do not know the which frame is used in the wallGoResults
     def setBackground(self, background: BoltzmannBackground) -> None:
@@ -1024,15 +1086,69 @@ class EWBGBoltzmannSolver:
         """
         self.collisionArray = collisionArray
 
-    def updateParticleList(self, offEqParticles: list[ComplexMassParticle]) -> None:
+    def updateParticleList(self, offEqParticles: list[Particle]) -> None:
         """
         Setter for the list of out-of-equilibrium Particle objects
         """
-        # TODO: update the collision array as well when one updates the particle list
-        for p in offEqParticles:
-            assert isinstance(p, ComplexMassParticle)
-
         self.offEqParticles = offEqParticles
+        self.usesChiralSpecies = any(
+            isinstance(particle, ChiralParticle) for particle in offEqParticles
+        )
+        if self.usesChiralSpecies:
+            invalidFermions = [
+                particle.name
+                for particle in offEqParticles
+                if particle.statistics == "Fermion"
+                and not isinstance(particle, ChiralParticle)
+            ]
+            if invalidFermions:
+                raise TypeError(
+                    "A chiral transport system requires every fermion to be a "
+                    f"ChiralParticle; invalid species: {invalidFermions}."
+                )
+            kineticStates = np.empty(
+                (len(self.offEqParticles), len(self.etas)), dtype=object
+            )
+            for particleIndex, particle in enumerate(self.offEqParticles):
+                for etaIndex, eta in enumerate(self.etas):
+                    helicity = (
+                        int(eta * particle.chirality)
+                        if isinstance(particle, ChiralParticle)
+                        else 0
+                    )
+                    kineticStates[particleIndex, etaIndex] = KineticState(
+                        particle, int(eta), helicity
+                    )
+            self.kineticStates = kineticStates
+            self.kineticStates.setflags(write=False)
+            return
+
+        invalidParticles = [
+            particle.name
+            for particle in offEqParticles
+            if not isinstance(particle, ComplexMassParticle)
+        ]
+        if invalidParticles:
+            raise TypeError(
+                "Non-chiral EWBG transport requires ComplexMassParticle objects; "
+                f"invalid species: {invalidParticles}."
+            )
+        kineticStates = np.empty(
+            (
+                len(self.offEqParticles),
+                len(self.etas),
+                len(self.helicities),
+            ),
+            dtype=object,
+        )
+        for particleIndex, particle in enumerate(self.offEqParticles):
+            for etaIndex, eta in enumerate(self.etas):
+                for helicityIndex, helicity in enumerate(self.helicities):
+                    kineticStates[particleIndex, etaIndex, helicityIndex] = (
+                        KineticState(particle, int(eta), int(helicity))
+                    )
+        self.kineticStates = kineticStates
+        self.kineticStates.setflags(write=False)
 
     def setWallGoResults(
         self,
@@ -1085,19 +1201,26 @@ class EWBGBoltzmannSolver:
         Parameters
         ----------
         deltaF : array_like, optional
-            Helicity-resolved deviation from local thermal equilibrium, with
-            axes ``(particle, helicity, z, pz, pp)``.
+            A five-dimensional legacy helicity distribution or chiral-species
+            charge distribution, or a six-dimensional legacy distribution
+            carrying both charge and helicity axes. The final three axes are
+            always ``(z, pz, pp)``.
 
         Returns
         -------
         Deltas : BoltzmannDeltas
             The four moments defined in equation (15) of [LC22]_, plus the
-            helicity-resolved number-density moment ``Delta10``. Each moment
-            has axes ``(particle, helicity, z)``.
+            number-density moment ``Delta10``. The moments retain all
+            non-momentum axes of ``deltaF``.
         """
         # checking if result pre-computed
         if deltaF is None:
             deltaF = self.solveBoltzmannEquations()
+        if deltaF.ndim not in (5, 6):
+            raise ValueError(
+                "deltaF must have axes (particle, helicity, z, pz, pp) or "
+                "(particle, eta, helicity, z, pz, pp)."
+            )
 
         # checking spectral convergence
         deltaF, shapeTruncated, spectralPeaks = self.checkSpectralConvergence(deltaF)
@@ -1107,23 +1230,26 @@ class EWBGBoltzmannSolver:
             deltaF, shapeTruncated
         )
         truncatedTail = (
-            shapeTruncated[2] != deltaF.shape[2],
-            shapeTruncated[3] != deltaF.shape[3],
-            shapeTruncated[4] != deltaF.shape[4],
+            shapeTruncated[-3] != deltaF.shape[-3],
+            shapeTruncated[-2] != deltaF.shape[-2],
+            shapeTruncated[-1] != deltaF.shape[-1],
         )
 
         particles = self.offEqParticles
+        arrayRank = deltaF.ndim - 3
+        arrayBases = ("Array",) * arrayRank
+        arrayDirections = ("Array",) * arrayRank
 
         # constructing Polynomial class from deltaF array
         deltaFPoly = Polynomial(
             deltaF,
             self.grid,
-            ("Array", "Array", self.basisM, self.basisN, self.basisN),
-            ("Array", "Array", "z", "pz", "pp"),
+            arrayBases + (self.basisM, self.basisN, self.basisN),
+            arrayDirections + ("z", "pz", "pp"),
             False,
         )
         deltaFPoly.changeBasis(
-            ("Array", "Array", "Cardinal", "Cardinal", "Cardinal")
+            arrayBases + ("Cardinal", "Cardinal", "Cardinal")
         )
 
         # Take all field-space points, but throw the boundary points away
@@ -1134,35 +1260,37 @@ class EWBGBoltzmannSolver:
 
         # adding new axes, to make everything rank 3 like deltaF (z, pz, pp)
         # for fast multiplication of arrays, using numpy's broadcasting rules
-        pz = self.grid.pzValues[None, None, None, :, None]
-        pp = self.grid.ppValues[None, None, None, None, :]
-        msq = np.array([particle.msqVacuum(field) for particle in particles])[
-            :, None, :, None, None
-        ]
+        pz = self.grid.pzValues.reshape((1,) * arrayRank + (1, -1, 1))
+        pp = self.grid.ppValues.reshape((1,) * arrayRank + (1, 1, -1))
+        msqShape = (len(particles),) + (1,) * (arrayRank - 1) + (-1, 1, 1)
+        msq = np.array(
+            [particle.msqVacuum(field) for particle in particles]
+        ).reshape(msqShape)
         # constructing energy with (z, pz, pp) axes
         energy = np.sqrt(msq + pz**2 + pp**2)
 
         _, dpzdrz, dppdrp = self.grid.getCompactificationDerivatives()
-        dpzdrz = dpzdrz[None, None, None, :, None]
-        dppdrp = dppdrp[None, None, None, None, :]
+        dpzdrz = dpzdrz.reshape((1,) * arrayRank + (1, -1, 1))
+        dppdrp = dppdrp.reshape((1,) * arrayRank + (1, 1, -1))
 
         # base integrand, for '00'
         integrand = dpzdrz * dppdrp * pp / (4 * np.pi**2 * energy)
 
+        momentumAxes = (deltaF.ndim - 2, deltaF.ndim - 1)
         Delta00 = deltaFPoly.integrate(  # pylint: disable=invalid-name
-            (3, 4), integrand
+            momentumAxes, integrand
         )
         Delta02 = deltaFPoly.integrate(  # pylint: disable=invalid-name
-            (3, 4), pz**2 * integrand
+            momentumAxes, pz**2 * integrand
         )
         Delta20 = deltaFPoly.integrate(  # pylint: disable=invalid-name
-            (3, 4), energy**2 * integrand
+            momentumAxes, energy**2 * integrand
         )
         Delta11 = deltaFPoly.integrate(  # pylint: disable=invalid-name
-            (3, 4), energy * pz * integrand
+            momentumAxes, energy * pz * integrand
         )
         Delta10 = deltaFPoly.integrate(  # pylint: disable=invalid-name
-            (3, 4), energy * integrand
+            momentumAxes, energy * integrand
         )
 
         Deltas = BoltzmannDeltas(  # pylint: disable=invalid-name
@@ -1218,9 +1346,10 @@ class EWBGBoltzmannSolver:
         Returns
         -------
         delta_f : array_like
-            The helicity-resolved deviation from equilibrium, with shape
-            ``(nParticles, nHelicities, M-1, N-1, N-1)``. Helicity values and
-            their array ordering are stored in :attr:`helicities`.
+            For a legacy Dirac basis, axes are ``(particle, helicity, z, pz,
+            pp)``. For a chiral-species basis, axes are ``(particle, eta, z,
+            pz, pp)`` and physical helicity is fixed by the corresponding
+            :class:`KineticState`.
 
         References
         ----------
@@ -1235,19 +1364,102 @@ class EWBGBoltzmannSolver:
         # solving the linear system: operator.deltaF = source
         deltaF = np.linalg.solve(operator, source)
 
-        # np.linalg.solve treats the helicity index as a set of right-hand
-        # sides. Restore it as an explicit array axis after the momentum axes.
+        # np.linalg.solve treats the transport-branch index as a set of
+        # right-hand sides. For a chiral species basis these are charge
+        # branches; for the legacy Dirac basis they are helicities.
+        branchCount = (
+            len(self.etas) if self.usesChiralSpecies else len(self.helicities)
+        )
         deltaFShape = (
             len(self.offEqParticles),
             self.grid.M - 1,
             self.grid.N - 1,
             self.grid.N - 1,
-            len(self.helicities),
+            branchCount,
         )
         deltaF = np.reshape(deltaF, deltaFShape, order="C")
         deltaF = np.moveaxis(deltaF, -1, 1)
 
         return deltaF
+
+    def reconstructChargeBranches(
+        self,
+        deltaFEven: np.ndarray,
+        deltaFOdd: np.ndarray,
+    ) -> np.ndarray:
+        r"""Construct :math:`\delta f_{\eta h}` from CP-even and CP-odd solutions.
+
+        The returned axes are ``(particle, eta, helicity, z, pz, pp)`` and
+
+        .. math::
+            \delta f_{\eta h}
+            = \delta f_h^{\mathrm{even}}+\eta\delta f_h^{\mathrm{odd}}.
+
+        This reconstruction assumes a CP-symmetric collision operator.  The
+        current collision tensor has no explicit charge or helicity axes.
+        """
+        if self.usesChiralSpecies:
+            raise ValueError(
+                "ChiralParticle species already carry explicit eta branches; "
+                "reconstruction is only defined for a legacy Dirac basis."
+            )
+        if deltaFEven.shape != deltaFOdd.shape:
+            raise ValueError(
+                "CP-even and CP-odd distributions must have equal shapes."
+            )
+        if deltaFEven.ndim != 5:
+            raise ValueError(
+                "CP-sector distributions must have axes "
+                "(particle, helicity, z, pz, pp)."
+            )
+
+        eta = self.etas.reshape(1, -1, 1, 1, 1, 1)
+        return deltaFEven[:, None, ...] + eta * deltaFOdd[:, None, ...]
+
+    def solveBoltzmannEquationsByCharge(
+        self,
+        sourceType: EWBGSourceType = EWBGSourceType.TOTAL,
+    ) -> np.ndarray:
+        r"""Solve the charge-resolved Boltzmann equation.
+
+        For a legacy Dirac basis, ``EVEN`` duplicates the CP-even solution on
+        both charge branches and ``ODD`` returns
+        :math:`\eta\delta f_h^{\mathrm{odd}}`. For a chiral species the source
+        sign is evaluated directly from :math:`\eta h=\chi`, with
+        :math:`h=\eta\chi`.
+
+        The current Liouville and collision operators are diagonal in the
+        explicit transport branches, while the source is evaluated for each
+        configured :class:`KineticState`. A legacy Dirac basis returns axes
+        ``(particle, eta, helicity, z, pz, pp)``. A chiral-species basis
+        returns ``(particle, eta, z, pz, pp)`` because helicity is fixed by
+        chirality and charge.
+        """
+        operator, source, _, _ = self.buildLinearEquations(
+            sourceType,
+            resolveChargeBranches=True,
+        )
+        deltaF = np.linalg.solve(operator, source)
+        if self.usesChiralSpecies:
+            deltaFShape = (
+                len(self.offEqParticles),
+                self.grid.M - 1,
+                self.grid.N - 1,
+                self.grid.N - 1,
+                len(self.etas),
+            )
+            deltaF = np.reshape(deltaF, deltaFShape, order="C")
+            return np.moveaxis(deltaF, -1, 1)
+        deltaFShape = (
+            len(self.offEqParticles),
+            self.grid.M - 1,
+            self.grid.N - 1,
+            self.grid.N - 1,
+            len(self.etas),
+            len(self.helicities),
+        )
+        deltaF = np.reshape(deltaF, deltaFShape, order="C")
+        return np.moveaxis(deltaF, (-2, -1), (1, 2))
 
     def estimateTruncationError(
         self, deltaF: np.ndarray, shapeTruncated: tuple[int, ...]
@@ -1269,51 +1481,45 @@ class EWBGBoltzmannSolver:
         truncationError : float
             Estimate of the relative truncation error.
         """
+        if deltaF.ndim not in (5, 6):
+            raise ValueError("deltaF must be helicity- or charge-resolved.")
+        arrayRank = deltaF.ndim - 3
+        arrayBases = ("Array",) * arrayRank
+
         # constructing Polynomial
-        basisTypes = ("Array", "Array", self.basisM, self.basisN, self.basisN)
-        basisNames = ("Array", "Array", "z", "pz", "pp")
+        basisTypes = arrayBases + (self.basisM, self.basisN, self.basisN)
+        basisNames = arrayBases + ("z", "pz", "pp")
         deltaFPoly = Polynomial(deltaF, self.grid, basisTypes, basisNames, False)
 
         # sum(|deltaF|) as the norm
         deltaFPoly.changeBasis(
-            ("Array", "Array", "Chebyshev", "Chebyshev", "Chebyshev")
+            arrayBases + ("Chebyshev", "Chebyshev", "Chebyshev")
         )
-        deltaFTuncated = deltaFPoly.coefficients[
-            :shapeTruncated[0],
-            :shapeTruncated[1],
-            :shapeTruncated[2],
-            :shapeTruncated[3],
-            :shapeTruncated[4],
-        ]
-        deltaFSumAbs = np.sum(
-            np.abs(deltaFTuncated),
-            axis=(2, 3, 4),
-        )
+        truncatedSlices = tuple(slice(0, size) for size in shapeTruncated)
+        deltaFTuncated = deltaFPoly.coefficients[truncatedSlices]
+        deltaFSumAbs = np.sum(np.abs(deltaFTuncated), axis=(-3, -2, -1))
 
         # estimating truncation errors in each direction
-        truncationErrorChi = np.sum(
-            np.abs(deltaFTuncated[:, :, -1, :, :]),
-            axis=(2, 3),
-        ) / deltaFSumAbs
-        truncationErrorPz = np.sum(
-            np.abs(deltaFTuncated[:, :, :, -1, :]),
-            axis=(2, 3),
-        ) / deltaFSumAbs
-        truncationErrorPp = np.sum(
-            np.abs(deltaFTuncated[:, :, :, :, -1]),
-            axis=(2, 3),
-        ) / deltaFSumAbs
+        truncationErrors = []
+        with np.errstate(divide="ignore", invalid="ignore"):
+            for axis in (-3, -2, -1):
+                boundary = np.take(deltaFTuncated, -1, axis=axis)
+                numerator = np.sum(np.abs(boundary), axis=(-2, -1))
+                truncationErrors.append(
+                    np.divide(
+                        numerator,
+                        deltaFSumAbs,
+                        out=np.zeros_like(numerator),
+                        where=deltaFSumAbs != 0,
+                    )
+                )
 
         # estimating the total truncation error as the maximum of these three
-        return max(  # type: ignore[no-any-return]
-            np.max(truncationErrorChi),
-            np.max(truncationErrorPz),
-            np.max(truncationErrorPp),
-        )
+        return max(float(np.max(error)) for error in truncationErrors)
 
     def checkSpectralConvergence(
         self, deltaF: np.ndarray
-    ) -> tuple[np.ndarray, tuple[int, int, int, int, int], tuple[int, int, int]]:
+    ) -> tuple[np.ndarray, tuple[int, ...], tuple[int, int, int]]:
         """
         Check for spectral convergence.
 
@@ -1338,29 +1544,28 @@ class EWBGBoltzmannSolver:
             Indices of the peaks in the (potentially truncated) spectral expansion.
         """
         # constructing Polynomial
-        basisTypes = ("Array", "Array", self.basisM, self.basisN, self.basisN)
-        basisNames = ("Array", "Array", "z", "pz", "pp")
+        if deltaF.ndim not in (5, 6):
+            raise ValueError("deltaF must be helicity- or charge-resolved.")
+        arrayRank = deltaF.ndim - 3
+        arrayBases = ("Array",) * arrayRank
+        basisTypes = arrayBases + (self.basisM, self.basisN, self.basisN)
+        basisNames = arrayBases + ("z", "pz", "pp")
         deltaFPoly = Polynomial(deltaF, self.grid, basisTypes, basisNames, False)
         truncatedShape = list(deltaF.shape)
 
         # changing to Chebyshev basis
         deltaFPoly.changeBasis(
-            ("Array", "Array", "Chebyshev", "Chebyshev", "Chebyshev")
+            arrayBases + ("Chebyshev", "Chebyshev", "Chebyshev")
         )
 
         # looking at convergence of spectral expansion
-        spectralCoeffsChi = np.sum(
-            np.abs(deltaFPoly.coefficients),
-            axis=(0, 1, 3, 4),
-        )
-        spectralCoeffsPz = np.sum(
-            np.abs(deltaFPoly.coefficients),
-            axis=(0, 1, 2, 4),
-        )
-        spectralCoeffsPp = np.sum(
-            np.abs(deltaFPoly.coefficients),
-            axis=(0, 1, 2, 3),
-        )
+        def spectralCoefficients(axis: int) -> np.ndarray:
+            sumAxes = tuple(i for i in range(deltaF.ndim) if i != axis)
+            return np.sum(np.abs(deltaFPoly.coefficients), axis=sumAxes)
+
+        spectralCoeffsChi = spectralCoefficients(deltaF.ndim - 3)
+        spectralCoeffsPz = spectralCoefficients(deltaF.ndim - 2)
+        spectralCoeffsPp = spectralCoefficients(deltaF.ndim - 1)
 
         # how much to cut, if truncating
         cutSpatial = -((self.grid.M - 1) // 3)
@@ -1397,23 +1602,30 @@ class EWBGBoltzmannSolver:
         if self.truncationOption == ETruncationOption.AUTO:
             # if the slope is not definitely negative, we will truncate
             if not chiConvergenceTailInfo.apparentConvergence:
-                deltaFPoly.coefficients[:, :, cutSpatial:, :, :] = 0
-                truncatedShape[2] = deltaF.shape[2] + cutSpatial
+                slices = [slice(None)] * deltaF.ndim
+                slices[-3] = slice(cutSpatial, None)
+                deltaFPoly.coefficients[tuple(slices)] = 0
+                truncatedShape[-3] = deltaF.shape[-3] + cutSpatial
             if not pzConvergenceTailInfo.apparentConvergence:
-                deltaFPoly.coefficients[:, :, :, cutMomentum:, :] = 0
-                truncatedShape[3] = deltaF.shape[3] + cutMomentum
+                slices = [slice(None)] * deltaF.ndim
+                slices[-2] = slice(cutMomentum, None)
+                deltaFPoly.coefficients[tuple(slices)] = 0
+                truncatedShape[-2] = deltaF.shape[-2] + cutMomentum
             if not ppConvergenceTailInfo.apparentConvergence:
-                deltaFPoly.coefficients[:, :, :, :, cutMomentum:] = 0
-                truncatedShape[4] = deltaF.shape[4] + cutMomentum
+                slices = [slice(None)] * deltaF.ndim
+                slices[-1] = slice(cutMomentum, None)
+                deltaFPoly.coefficients[tuple(slices)] = 0
+                truncatedShape[-1] = deltaF.shape[-1] + cutMomentum
         elif self.truncationOption == ETruncationOption.THIRD:
             # truncating regardless
-            deltaFPoly.coefficients[:, :, cutSpatial:, :, :] = 0
-            deltaFPoly.coefficients[:, :, :, cutMomentum:, :] = 0
-            deltaFPoly.coefficients[:, :, :, :, cutMomentum:] = 0
-            truncatedShape[2:] = [
-                deltaF.shape[2] + cutSpatial,
-                deltaF.shape[3] + cutMomentum,
-                deltaF.shape[4] + cutMomentum,
+            for axis, cut in zip((-3, -2, -1), (cutSpatial, cutMomentum, cutMomentum)):
+                slices = [slice(None)] * deltaF.ndim
+                slices[axis] = slice(cut, None)
+                deltaFPoly.coefficients[tuple(slices)] = 0
+            truncatedShape[-3:] = [
+                deltaF.shape[-3] + cutSpatial,
+                deltaF.shape[-2] + cutMomentum,
+                deltaF.shape[-1] + cutMomentum,
             ]
             if allTailsConverging:
                 logging.info(
@@ -1428,17 +1640,17 @@ class EWBGBoltzmannSolver:
 
         # checking spectral convergence of z direction
         chiConvergenceInfo = SpectralConvergenceInfo(
-            spectralCoeffsChi[:truncatedShape[2]], weightPower=0
+            spectralCoeffsChi[:truncatedShape[-3]], weightPower=0
         )
 
         # checking spectral convergence of pz direction
         pzConvergenceInfo = SpectralConvergenceInfo(
-            spectralCoeffsPz[:truncatedShape[3]], weightPower=1
+            spectralCoeffsPz[:truncatedShape[-2]], weightPower=1
         )
 
         # checking spectral convergence of pp direction
         ppConvergenceInfo = SpectralConvergenceInfo(
-            spectralCoeffsPp[:truncatedShape[4]], weightPower=2
+            spectralCoeffsPp[:truncatedShape[-1]], weightPower=2
         )
 
         # putting together the spectral peaks
@@ -1487,6 +1699,14 @@ class EWBGBoltzmannSolver:
         """
         if deltaF is None:
             deltaF = self.solveBoltzmannEquations()
+        if deltaF.ndim == 6:
+            criteria = [
+                self.checkLinearization(deltaF[:, etaIndex])
+                for etaIndex in range(len(self.etas))
+            ]
+            return tuple(np.max(criteria, axis=0))  # type: ignore[return-value]
+        if deltaF.ndim != 5:
+            raise ValueError("deltaF must be helicity- or charge-resolved.")
 
         particles = self.offEqParticles
 
@@ -1519,14 +1739,17 @@ class EWBGBoltzmannSolver:
         # Computing the correction from nonlinear terms
         totalSize = operator.shape[0]
         source = np.moveaxis(source, 1, -1)
-        source = np.reshape(source, (totalSize, len(self.helicities)), order="C")
+        branchCount = (
+            len(self.etas) if self.usesChiralSpecies else len(self.helicities)
+        )
+        source = np.reshape(source, (totalSize, branchCount), order="C")
         deltaNonlin = np.linalg.solve(operator, source)
         deltaNonlinShape = (
             len(self.offEqParticles),
             self.grid.M - 1,
             self.grid.N - 1,
             self.grid.N - 1,
-            len(self.helicities),
+            branchCount,
         )
         deltaNonlin = np.reshape(deltaNonlin, deltaNonlinShape, order="C")
         deltaNonlin = np.moveaxis(deltaNonlin, -1, 1)
@@ -1560,6 +1783,8 @@ class EWBGBoltzmannSolver:
         thetaFull = np.array(
             [
                 particle.phase(self.background.fieldProfiles)
+                if isinstance(particle, ComplexMassParticle)
+                else np.zeros_like(particle.msqVacuum(self.background.fieldProfiles))
                 for particle in particles
             ]
         )
@@ -1605,21 +1830,22 @@ class EWBGBoltzmannSolver:
             :, None, None, None
         ]
         integrand = dofs * dmsqdChi * dpzdrz * dppdrp * pp / (4 * np.pi**2 * energy)
-        # ``totalDOFs`` includes both helicities. Each explicit helicity
-        # distribution therefore carries half of that multiplicity.
-        integrandPerHelicity = integrand[:, None, ...] / 2
+        # ``totalDOFs`` includes the two explicit transport branches: the two
+        # helicities for a legacy Dirac particle or particle/antiparticle for
+        # a chiral species. Each branch carries half of that multiplicity.
+        integrandPerBranch = integrand[:, None, ...] / 2
 
         # Computing the pressure contributions of the equilibrium part, the linear
         # out-of-equilibrium part and the first-order correction due to nonlinearities.
         pressureEq = np.sum(fEqPoly.integrate((1, 2, 3), integrand).coefficients)
         pressureDeltaF = np.sum(
             deltaFPoly.integrate(
-                (2, 3, 4), integrandPerHelicity
+                (2, 3, 4), integrandPerBranch
             ).coefficients
         )
         pressureNonlin = np.sum(
             deltaNonlinPoly.integrate(
-                (2, 3, 4), integrandPerHelicity
+                (2, 3, 4), integrandPerBranch
             ).coefficients
         )
 
@@ -1632,6 +1858,7 @@ class EWBGBoltzmannSolver:
     def buildLinearEquations(
         self,
         sourceType: EWBGSourceType = EWBGSourceType.ODD,
+        resolveChargeBranches: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Construct the matrix and selected source for the Boltzmann equation.
@@ -1643,6 +1870,11 @@ class EWBGBoltzmannSolver:
         sourceType : EWBGSourceType, optional
             Select the CP-even, CP-odd, or total source. The default is the
             CP-odd source used for baryogenesis.
+        resolveChargeBranches : bool, optional
+            Construct the source for every explicit :class:`KineticState`.
+            For a legacy Dirac basis, right-hand sides are ordered by
+            ``(eta, helicity)``. A chiral-species basis always uses one
+            right-hand side per ``eta`` branch.
         """
         if not isinstance(sourceType, EWBGSourceType):
             raise TypeError("sourceType must be an EWBGSourceType.")
@@ -1672,7 +1904,12 @@ class EWBGBoltzmannSolver:
         )
 
         thetaFull = np.array(
-            [particle.phase(self.background.fieldProfiles) for particle in particles]
+            [
+                particle.phase(self.background.fieldProfiles)
+                if isinstance(particle, ComplexMassParticle)
+                else np.zeros_like(particle.msqVacuum(self.background.fieldProfiles))
+                for particle in particles
+            ]
         )
 
         velocityWall = self.background.velocityWall
@@ -1794,7 +2031,7 @@ class EWBGBoltzmannSolver:
         # This is -(P_w d_xi + F_even d_p) f_eq. It is the same source used
         # by BoltzmannSolver for wall friction and is independent of helicity
         # at the order retained here.
-        sourceEven = (
+        sourceEvenBase = (
             (dfEq / temperature)
             * dchidxi
             * (
@@ -1803,7 +2040,6 @@ class EWBGBoltzmannSolver:
                 + 0.5 * dMsqdChi * uwBaruPl
             )
         )
-        sourceEven = np.repeat(sourceEven[:, None, ...], len(self.helicities), axis=1)
 
         ##### CP-odd source term #####
 
@@ -1819,28 +2055,28 @@ class EWBGBoltzmannSolver:
         deltaEnergy = 0.5 * sp * dThetadChi * msq * dchidxi / energyZ / energy
         ddeltaEnergydxi = 0.5 * sp * cpGradient / energyZ / energy
 
-        sourceOdd = -dfEq * gammaPlasma * v / temperature * forceOdd
-        sourceOdd = sourceOdd - momentumWall * d2feq * (
+        sourceOddBase = -dfEq * gammaPlasma * v / temperature * forceOdd
+        sourceOddBase = sourceOddBase - momentumWall * d2feq * (
             -(
                 momentumPlasma * gammaPlasma**2 * dvdChi
                 + energyPlasma * dTemperaturedChi / temperature
             )
             / temperature
         ) * dchidxi * gammaPlasma / temperature * deltaEnergy
-        sourceOdd = sourceOdd - momentumWall * dfEq * (
+        sourceOddBase = sourceOddBase - momentumWall * dfEq * (
             gammaPlasma**3 * v * dvdChi * dchidxi / temperature
             - gammaPlasma * dTemperaturedChi * dchidxi / temperature**2
         ) * deltaEnergy
-        sourceOdd = (
-            sourceOdd
+        sourceOddBase = (
+            sourceOddBase
             - momentumWall
             * dfEq
             * gammaPlasma
             / temperature
             * ddeltaEnergydxi
         )
-        sourceOdd = (
-            sourceOdd
+        sourceOddBase = (
+            sourceOddBase
             - 0.5
             * dMsqdChi
             * dchidxi
@@ -1851,13 +2087,59 @@ class EWBGBoltzmannSolver:
             * deltaEnergy
         )
 
-        # The CP-odd semiclassical source is odd in helicity. The transport
-        # operator below is helicity diagonal and identical for h=-1 and h=+1,
-        # so helicity can be retained as a multiple-right-hand-side index.
-        sourceOdd = (
-            sourceOdd[:, None, ...]
-            * self.helicities[None, :, None, None, None]
-        )
+        if self.usesChiralSpecies:
+            if self.kineticStates.shape != (len(particles), len(self.etas)):
+                raise RuntimeError(
+                    "Kinetic states are inconsistent with the chiral particle list."
+                )
+            cpSigns = np.asarray(
+                [state.cpSign for state in self.kineticStates.flat],
+                dtype=int,
+            ).reshape(self.kineticStates.shape)
+            sourceEven = np.broadcast_to(
+                sourceEvenBase[:, None, ...],
+                (
+                    len(particles),
+                    len(self.etas),
+                    *sourceEvenBase.shape[1:],
+                ),
+            )
+            sourceOdd = (
+                sourceOddBase[:, None, ...]
+                * cpSigns[:, :, None, None, None]
+            )
+        elif resolveChargeBranches:
+            if self.kineticStates.shape != (
+                len(particles), len(self.etas), len(self.helicities)
+            ):
+                raise RuntimeError(
+                    "Kinetic states are inconsistent with the particle list."
+                )
+            cpSigns = np.asarray(
+                [state.cpSign for state in self.kineticStates.flat],
+                dtype=int,
+            ).reshape(self.kineticStates.shape)
+            sourceEven = np.broadcast_to(
+                sourceEvenBase[:, None, None, ...],
+                (
+                    len(particles),
+                    len(self.etas),
+                    len(self.helicities),
+                    *sourceEvenBase.shape[1:],
+                ),
+            )
+            sourceOdd = (
+                sourceOddBase[:, None, None, ...]
+                * cpSigns[:, :, :, None, None, None]
+            )
+        else:
+            sourceEven = np.repeat(
+                sourceEvenBase[:, None, ...], len(self.helicities), axis=1
+            )
+            sourceOdd = (
+                sourceOddBase[:, None, ...]
+                * self.helicities[None, :, None, None, None]
+            )
 
         if sourceType == EWBGSourceType.EVEN:
             source = sourceEven
@@ -1921,8 +2203,21 @@ class EWBGBoltzmannSolver:
         totalSize = (
             len(particles) * (self.grid.M - 1) * (self.grid.N - 1) * (self.grid.N - 1)
         )
-        source = np.moveaxis(source, 1, -1)
-        source = np.reshape(source, (totalSize, len(self.helicities)), order="C")
+        if self.usesChiralSpecies:
+            source = np.moveaxis(source, 1, -1)
+            source = np.reshape(source, (totalSize, len(self.etas)), order="C")
+        elif resolveChargeBranches:
+            source = np.moveaxis(source, (1, 2), (-2, -1))
+            source = np.reshape(
+                source,
+                (totalSize, len(self.etas) * len(self.helicities)),
+                order="C",
+            )
+        else:
+            source = np.moveaxis(source, 1, -1)
+            source = np.reshape(
+                source, (totalSize, len(self.helicities)), order="C"
+            )
         operator = np.reshape(operator, (totalSize, totalSize), order="C")
 
         # returning results

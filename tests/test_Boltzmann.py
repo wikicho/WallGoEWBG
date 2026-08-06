@@ -5,7 +5,7 @@ import pytest  # for tests
 import numpy as np  # arrays and maths
 import pathlib
 import WallGo
-from WallGo.particle import ComplexMassParticle
+from WallGo.particle import ChiralParticle, ComplexMassParticle
 
 
 real_path = pathlib.Path(__file__)
@@ -175,6 +175,14 @@ def test_ewbg_solution_keeps_helicity_index(
         WallGo.EWBGSourceType.TOTAL
     )
     _, sourceDefault, _, _ = boltzmann.buildLinearEquations()
+    _, sourceOddByCharge, _, _ = boltzmann.buildLinearEquations(
+        WallGo.EWBGSourceType.ODD,
+        resolveChargeBranches=True,
+    )
+    _, sourceEvenByCharge, _, _ = boltzmann.buildLinearEquations(
+        WallGo.EWBGSourceType.EVEN,
+        resolveChargeBranches=True,
+    )
 
     wallBoltzmann = WallGo.BoltzmannSolver(
         grid,
@@ -196,6 +204,19 @@ def test_ewbg_solution_keeps_helicity_index(
     np.testing.assert_allclose(sourceTotal, sourceEven + sourceOdd)
     np.testing.assert_allclose(sourceDefault, sourceOdd)
 
+    sourceOddByCharge = sourceOddByCharge.reshape(
+        operator.shape[0], len(boltzmann.etas), len(boltzmann.helicities)
+    )
+    sourceEvenByCharge = sourceEvenByCharge.reshape(
+        operator.shape[0], len(boltzmann.etas), len(boltzmann.helicities)
+    )
+    particleIndex = boltzmann.getEtaIndex(1)
+    antiparticleIndex = boltzmann.getEtaIndex(-1)
+    np.testing.assert_allclose(sourceOddByCharge[:, particleIndex], sourceOdd)
+    np.testing.assert_allclose(sourceOddByCharge[:, antiparticleIndex], -sourceOdd)
+    np.testing.assert_allclose(sourceEvenByCharge[:, particleIndex], sourceEven)
+    np.testing.assert_allclose(sourceEvenByCharge[:, antiparticleIndex], sourceEven)
+
     deltaFOdd = boltzmann.solveBoltzmannEquations(WallGo.EWBGSourceType.ODD)
     deltaFEven = boltzmann.solveBoltzmannEquations(WallGo.EWBGSourceType.EVEN)
     deltaFTotal = boltzmann.solveBoltzmannEquations(WallGo.EWBGSourceType.TOTAL)
@@ -209,6 +230,57 @@ def test_ewbg_solution_keeps_helicity_index(
     np.testing.assert_allclose(deltaFOdd[:, 0], -deltaFOdd[:, 1])
     np.testing.assert_allclose(deltaFEven[:, 0], deltaFEven[:, 1])
     np.testing.assert_allclose(deltaFTotal, deltaFEven + deltaFOdd)
+
+    assert tuple(boltzmann.etas) == (1, -1)
+    assert boltzmann.chargeBranches is boltzmann.etas
+    assert boltzmann.kineticStates.shape == (1, 2, 2)
+    particleState = boltzmann.getKineticState(0, eta=1, helicity=1)
+    antiparticleState = boltzmann.getKineticState(0, eta=-1, helicity=1)
+    assert isinstance(particleState, WallGo.KineticState)
+    assert particleState.particle is particle
+    assert particleState.isParticle
+    assert particleState.cpSign == 1
+    assert not antiparticleState.isParticle
+    assert antiparticleState.cpSign == -1
+    np.testing.assert_allclose(
+        antiparticleState.phase(boltzmann.background.fieldProfiles),
+        -particleState.phase(boltzmann.background.fieldProfiles),
+    )
+    deltaFOddByCharge = boltzmann.solveBoltzmannEquationsByCharge(
+        WallGo.EWBGSourceType.ODD
+    )
+    deltaFEvenByCharge = boltzmann.solveBoltzmannEquationsByCharge(
+        WallGo.EWBGSourceType.EVEN
+    )
+    deltaFTotalByCharge = boltzmann.solveBoltzmannEquationsByCharge(
+        WallGo.EWBGSourceType.TOTAL
+    )
+    assert deltaFTotalByCharge.shape == (
+        1,
+        2,
+        2,
+        spatialGridSize - 1,
+        momentumGridSize - 1,
+        momentumGridSize - 1,
+    )
+    np.testing.assert_allclose(
+        deltaFOddByCharge[:, particleIndex], deltaFOdd
+    )
+    np.testing.assert_allclose(
+        deltaFOddByCharge[:, antiparticleIndex], -deltaFOdd
+    )
+    np.testing.assert_allclose(
+        deltaFEvenByCharge[:, particleIndex], deltaFEven
+    )
+    np.testing.assert_allclose(
+        deltaFEvenByCharge[:, antiparticleIndex], deltaFEven
+    )
+    np.testing.assert_allclose(
+        deltaFTotalByCharge[:, particleIndex], deltaFEven + deltaFOdd
+    )
+    np.testing.assert_allclose(
+        deltaFTotalByCharge[:, antiparticleIndex], deltaFEven - deltaFOdd
+    )
 
     for helicity in boltzmann.helicities:
         helicityIndex = boltzmann.getHelicityIndex(helicity)
@@ -232,9 +304,134 @@ def test_ewbg_solution_keeps_helicity_index(
         results.Deltas.Delta10.coefficients[:, 0],
         -results.Deltas.Delta10.coefficients[:, 1],
     )
+    chargeResults = boltzmann.getDeltas(deltaFOddByCharge)
+    assert chargeResults.Deltas.Delta10 is not None
+    assert chargeResults.Deltas.Delta10.coefficients.shape == (
+        1,
+        2,
+        2,
+        spatialGridSize - 1,
+    )
+    np.testing.assert_allclose(
+        chargeResults.Deltas.Delta10.coefficients[:, particleIndex],
+        results.Deltas.Delta10.coefficients,
+    )
+    np.testing.assert_allclose(
+        chargeResults.Deltas.Delta10.coefficients[:, antiparticleIndex],
+        -results.Deltas.Delta10.coefficients,
+    )
     assert np.all(np.isfinite(boltzmann.checkLinearization(deltaFOdd)))
+    assert np.all(np.isfinite(boltzmann.checkLinearization(deltaFOddByCharge)))
+    with pytest.raises(ValueError, match="Charge branch"):
+        boltzmann.getEtaIndex(0)
+    with pytest.raises(ValueError, match="eta"):
+        WallGo.KineticState(particle, eta=0, helicity=1)
+    with pytest.raises(ValueError, match="helicity"):
+        WallGo.KineticState(particle, eta=1, helicity=0)
     with pytest.raises(TypeError, match="sourceType"):
         boltzmann.buildLinearEquations("odd")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("spatialGridSize", [3])
+def test_ewbg_chiral_species_with_scalar_charge_branches(
+    boltzmannTestBackground: WallGo.BoltzmannBackground,
+    spatialGridSize: int,
+) -> None:
+    """Chiral fermions and a scalar share charge, but not helicity, branches."""
+
+    gridSize = spatialGridSize
+    grid = WallGo.grid.Grid(gridSize, gridSize, 1, 1)
+
+    def topMassSq(fields):
+        return 0.5 * fields.getField(0) ** 2
+
+    def topMassSqDerivative(fields):
+        return np.transpose([fields.getField(0)])
+
+    def topPhase(fields):
+        return 0.2 * fields.getField(0)
+
+    def zeroMassSq(fields):
+        return np.zeros_like(fields.getField(0))
+
+    def zeroMassSqDerivative(fields):
+        return np.zeros_like(fields)
+
+    def zeroPhase(fields):
+        return np.zeros_like(fields.getField(0))
+
+    topL = ChiralParticle(
+        "TopL", 0, topMassSq, topMassSqDerivative, topPhase, -1, 6
+    )
+    topR = ChiralParticle(
+        "TopR", 1, topMassSq, topMassSqDerivative, topPhase, 1, 6
+    )
+    botL = ChiralParticle(
+        "BotL", 2, zeroMassSq, zeroMassSqDerivative, zeroPhase, -1, 6
+    )
+    higgs = WallGo.Particle(
+        "Higgs",
+        3,
+        lambda fields: 0.2 + 0.1 * fields.getField(0) ** 2,
+        lambda fields: np.transpose([0.2 * fields.getField(0)]),
+        "Boson",
+        4,
+    )
+    particles = [topL, topR, botL, higgs]
+
+    boltzmann = WallGo.EWBGBoltzmannSolver(
+        grid,
+        basisM="Cardinal",
+        basisN="Cardinal",
+        truncationOption=WallGo.ETruncationOption.NONE,
+    )
+    boltzmann.updateParticleList(particles)
+    boltzmann.background = boltzmannTestBackground
+    boltzmann.background.boostToPlasmaFrame()
+
+    collisionArray = WallGo.CollisionArray(grid, "Cardinal", particles)
+    collisionArray.polynomialData.coefficients.fill(0)
+    for particleIndex in range(len(particles)):
+        for pzIndex in range(gridSize - 1):
+            for ppIndex in range(gridSize - 1):
+                collisionArray.polynomialData.coefficients[
+                    particleIndex,
+                    pzIndex,
+                    ppIndex,
+                    particleIndex,
+                    pzIndex,
+                    ppIndex,
+                ] = 1
+    boltzmann.setCollisionArray(collisionArray)
+
+    operator, sourceOdd, _, _ = boltzmann.buildLinearEquations(
+        WallGo.EWBGSourceType.ODD,
+        resolveChargeBranches=True,
+    )
+    assert sourceOdd.shape == (operator.shape[0], 2)
+    sourceOdd = sourceOdd.reshape(
+        len(particles), gridSize - 1, gridSize - 1, gridSize - 1, 2
+    )
+    np.testing.assert_allclose(sourceOdd[0], -sourceOdd[1])
+    np.testing.assert_allclose(sourceOdd[2], 0)
+    np.testing.assert_allclose(sourceOdd[3], 0)
+
+    assert boltzmann.usesChiralSpecies
+    assert boltzmann.kineticStates.shape == (4, 2)
+    assert boltzmann.getKineticState(0, eta=1, helicity=-1).particle is topL
+    assert boltzmann.getKineticState(0, eta=-1, helicity=1).particle is topL
+    assert boltzmann.getKineticState(1, eta=1, helicity=1).particle is topR
+    assert boltzmann.getKineticState(3, eta=1, helicity=0).particle is higgs
+
+    deltaF = boltzmann.solveBoltzmannEquationsByCharge(
+        WallGo.EWBGSourceType.ODD
+    )
+    assert deltaF.shape == (4, 2, gridSize - 1, gridSize - 1, gridSize - 1)
+    results = boltzmann.getDeltas(deltaF)
+    assert results.Deltas.Delta10 is not None
+    assert results.Deltas.Delta10.coefficients.shape == (4, 2, gridSize - 1)
+    with pytest.raises(ValueError, match="already carry explicit eta"):
+        boltzmann.reconstructChargeBranches(deltaF, deltaF)
 
 
 @pytest.mark.parametrize("helicities", [(), (-1, -1), (0, 1)])

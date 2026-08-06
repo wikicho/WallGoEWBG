@@ -4,6 +4,7 @@ Module with Particle class to hold particle information
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import typing
 import numpy as np
 from .fields import Fields, FieldPoint
@@ -179,3 +180,87 @@ class ComplexMassParticle(Particle):
 
         if not callable(phase):
             raise TypeError("phase must be callable")
+
+
+class ChiralParticle(ComplexMassParticle):
+    r"""A Weyl species with a fixed chirality and complex Dirac-mass phase.
+
+    ``chirality=-1`` denotes a left-handed species and ``chirality=+1`` a
+    right-handed species. For a charge branch ``eta``, the physical helicity
+    is ``helicity = eta * chirality`` in the ultrarelativistic limit.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        index: int,
+        msqVacuum: typing.Callable[[Fields | FieldPoint], np.ndarray],
+        msqDerivative: typing.Callable[[Fields | FieldPoint], np.ndarray],
+        phase: typing.Callable[[Fields | FieldPoint], np.ndarray],
+        chirality: int,
+        totalDOFs: int,
+    ) -> None:
+        if chirality not in (-1, 1):
+            raise ValueError("chirality must be -1 (left) or +1 (right).")
+        self.chirality = chirality
+        super().__init__(
+            name=name,
+            index=index,
+            msqVacuum=msqVacuum,
+            msqDerivative=msqDerivative,
+            phase=phase,
+            statistics="Fermion",
+            totalDOFs=totalDOFs,
+        )
+
+
+@dataclass(frozen=True)
+class KineticState:
+    r"""A charge- and helicity-resolved transport state.
+
+    For ``ChiralParticle`` objects, helicity is fixed by
+    :math:`h=\eta\chi`. A bosonic state uses ``helicity=0``.
+    """
+
+    particle: Particle
+    eta: int
+    helicity: int
+
+    def __post_init__(self) -> None:
+        if self.eta not in (-1, 1):
+            raise ValueError("eta must be +1 (particle) or -1 (antiparticle).")
+        if isinstance(self.particle, ChiralParticle):
+            expectedHelicity = self.eta * self.particle.chirality
+            if self.helicity != expectedHelicity:
+                raise ValueError(
+                    "helicity must equal eta * chirality for a chiral particle."
+                )
+        elif isinstance(self.particle, ComplexMassParticle):
+            if self.helicity not in (-1, 1):
+                raise ValueError("helicity must be either -1 or +1.")
+        elif self.particle.statistics == "Boson":
+            if self.helicity != 0:
+                raise ValueError("a bosonic kinetic state must have helicity 0.")
+        else:
+            raise TypeError(
+                "fermionic kinetic states require ComplexMassParticle or "
+                "ChiralParticle."
+            )
+        if self.helicity not in (-1, 0, 1):
+            raise ValueError("helicity must be -1, 0, or +1.")
+
+    @property
+    def cpSign(self) -> int:
+        r"""Return the branch sign :math:`\eta h` of the CP-odd source."""
+        return self.eta * self.helicity
+
+    @property
+    def isParticle(self) -> bool:
+        """Whether this is the particle rather than antiparticle branch."""
+        return self.eta == 1
+
+    def phase(self, fields: Fields | FieldPoint) -> np.ndarray:
+        r"""Return the charge-conjugated phase :math:`\theta_\eta=\eta\theta`."""
+        if isinstance(self.particle, ComplexMassParticle):
+            return self.eta * self.particle.phase(fields)
+        return np.zeros_like(self.particle.msqVacuum(fields))

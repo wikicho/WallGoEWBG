@@ -32,7 +32,7 @@ from .manager import (
     EWBGWallGoManager,
     EWBGSolver,
 )
-from .particle import Particle
+from .particle import Particle, ComplexMassParticle, ChiralParticle, KineticState
 from .polynomial import Polynomial, SpectralConvergenceInfo
 from .thermodynamics import Thermodynamics
 from .equationOfMotion import EOM

@@ -854,6 +854,7 @@ class EWBGWallGoManager(WallGoManager):
         self,
         ewbgSolver: EWBGSolver,
         sourceType: EWBGSourceType = EWBGSourceType.ODD,
+        resolveChargeBranches: bool = False,
     ) -> np.ndarray:
         r"""
         Solves the EWBG Boltzmann equation for the source terms.
@@ -866,13 +867,27 @@ class EWBGWallGoManager(WallGoManager):
         sourceType : EWBGSourceType, optional
             Select the CP-even, CP-odd, or total source. The default is
             ``EWBGSourceType.ODD``.
+        resolveChargeBranches : bool, optional
+            If ``True``, return an explicit charge branch ``eta`` with
+            ``eta=+1`` for particles and ``eta=-1`` for antiparticles.
+            The default preserves the CP-sector representation.
 
         Returns
         -------
         np.ndarray
-            Helicity-resolved distribution with axes
-            ``(particle, helicity, z, pz, pp)``.
+            For a legacy Dirac-particle basis, the axes are ``(particle,
+            helicity, z, pz, pp)`` or, when ``resolveChargeBranches`` is true,
+            ``(particle, eta, helicity, z, pz, pp)``. For a chiral-species
+            basis, the axes are ``(particle, eta, z, pz, pp)`` and each
+            particle/charge pair has the physical helicity stored in its
+            :class:`KineticState`.
         """
+        if resolveChargeBranches:
+            return (
+                ewbgSolver.EWBGBoltzmannSolver.solveBoltzmannEquationsByCharge(
+                    sourceType
+                )
+            )
         return ewbgSolver.EWBGBoltzmannSolver.solveBoltzmannEquations(sourceType)
 
     def getDeltas(
@@ -880,5 +895,9 @@ class EWBGWallGoManager(WallGoManager):
         ewbgSolver: EWBGSolver,
         deltaF: typing.Optional[np.ndarray] = None,
     ) -> BoltzmannResults:
-        """Return moments computed by the EWBG Boltzmann solver."""
+        """Return moments computed by the EWBG Boltzmann solver.
+
+        ``deltaF`` may be helicity resolved or carry the additional explicit
+        charge branch returned by :meth:`solveBoltzmannEWBG`.
+        """
         return ewbgSolver.EWBGBoltzmannSolver.getDeltas(deltaF)

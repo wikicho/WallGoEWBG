@@ -32,3 +32,6 @@ old/
 *.so
 Pipfile
 Pipfile.lock
+.claude/
+.github/
+.pytest_cache/
